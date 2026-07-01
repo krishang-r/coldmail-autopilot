@@ -1,5 +1,5 @@
 {
-  "name": "auto-email-sender",
+  "name": "coldmail-autopilot",
   "version": "1.0.0",
   "description": "Local tool for sending templated cold emails to hiring teams, with company-name email guessing and scheduling.",
   "main": "server.js",

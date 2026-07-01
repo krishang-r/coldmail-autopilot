@@ -267,7 +267,7 @@ app.delete('/api/jobs/:id', (req, res) => {
 });
 
 const httpServer = app.listen(PORT, () => {
-  console.log(`Auto Email Sender running at http://localhost:${PORT}`);
+  console.log(`Coldmail Autopilot running at http://localhost:${PORT}`);
   scheduler.start();
 });
 
@@ -275,9 +275,9 @@ httpServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(
       `\nPort ${PORT} is already in use - the background service (LaunchAgent ` +
-        `com.krishang.autoemailsender) is likely already running the app.\n` +
+        `com.krishang.coldmailautopilot) is likely already running the app.\n` +
         `Just open http://localhost:${PORT} - you don't need to start it manually.\n` +
-        `To stop the background service: launchctl unload ~/Library/LaunchAgents/com.krishang.autoemailsender.plist\n`
+        `To stop the background service: launchctl unload ~/Library/LaunchAgents/com.krishang.coldmailautopilot.plist\n`
     );
     process.exit(1);
   }
