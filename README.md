@@ -185,6 +185,137 @@ npm run dev
 
 Then open your browser to `http://localhost:47281` (or whatever `PORT` you set).
 
+> **Note:** `npm start` only keeps the app alive as long as that terminal window/tab stays open. See the next section before you rely on scheduling.
+
+## Keeping it running in the background
+
+**This matters more than it sounds like.** "Schedule for later" and "randomize within a window" don't queue anything with Gmail or any outside service — they just save a job with a future timestamp in `data/db.json`. The actual sending is done by a poller in [lib/scheduler.js](lib/scheduler.js) that wakes up every 15 seconds, checks whether any job's send time has arrived, and fires it off. That poller only exists while the `node server.js` process is alive.
+
+So if you run `npm start` in a terminal, schedule some emails for tomorrow at 9am, then close the terminal (or the laptop lid puts the process to sleep, or you log out) — the Node process is killed, the scheduler stops ticking, and **those emails simply never get sent**. There's no cron job or external worker backing this; it's all in-process. Nothing will error or warn you — the job will just sit at `pending` in the Jobs list forever, past its scheduled time, until you manually start the server again (at which point the scheduler's first tick will immediately fire anything that's overdue).
+
+To make scheduled and randomized sends actually reliable, run the server as a background service that starts automatically and restarts itself if it crashes, independent of any terminal session.
+
+<details>
+<summary><strong>macOS — launchd (LaunchAgent)</strong></summary>
+
+Create `~/Library/LaunchAgents/com.yourname.coldmailautopilot.plist` (swap in your own paths):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yourname.coldmailautopilot</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/path/to/coldmail-autopilot/server.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/path/to/coldmail-autopilot</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/path/to/coldmail-autopilot/logs/out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/path/to/coldmail-autopilot/logs/error.log</string>
+</dict>
+</plist>
+```
+
+Find your Node path with `which node` and use that instead of `/usr/local/bin/node` if it differs (Homebrew on Apple Silicon installs to `/opt/homebrew/bin/node`).
+
+Load it:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.yourname.coldmailautopilot.plist
+```
+
+`RunAtLoad` starts it at login; `KeepAlive` restarts it if it ever exits/crashes. It now runs regardless of whether any terminal is open.
+
+To stop it:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.yourname.coldmailautopilot.plist
+```
+
+</details>
+
+<details>
+<summary><strong>Linux — systemd (user service)</strong></summary>
+
+Create `~/.config/systemd/user/coldmailautopilot.service`:
+
+```ini
+[Unit]
+Description=Cold Mail Autopilot
+
+[Service]
+ExecStart=/usr/bin/node /path/to/coldmail-autopilot/server.js
+WorkingDirectory=/path/to/coldmail-autopilot
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Enable and start it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now coldmailautopilot.service
+```
+
+So it also survives logout, enable lingering for your user:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+Check status/logs:
+
+```bash
+systemctl --user status coldmailautopilot.service
+journalctl --user -u coldmailautopilot.service -f
+```
+
+</details>
+
+<details>
+<summary><strong>Windows — Task Scheduler</strong></summary>
+
+1. Open **Task Scheduler** → **Create Task** (not "Basic Task", so you get more options).
+2. **General** tab: name it "Cold Mail Autopilot", select **Run whether user is logged on or not**, and check **Run with highest privileges** if needed.
+3. **Triggers** tab: **New** → **At log on** (and optionally **At startup**).
+4. **Actions** tab: **New** → **Start a program**:
+   - Program/script: path to `node.exe` (find it with `where node` in PowerShell, typically `C:\Program Files\nodejs\node.exe`)
+   - Add arguments: `server.js`
+   - Start in: the full path to your `coldmail-autopilot` folder
+5. **Settings** tab: check **If the task fails, restart every** and set it to something like 1 minute, with a high restart limit.
+6. Save (you'll be prompted for your Windows password since it runs whether logged in or not).
+
+The task now starts the server at login/startup and restarts it if it crashes, independent of any open terminal.
+
+**Simpler cross-platform alternative:** install [pm2](https://pm2.keymetrics.io/), which handles process supervision + auto-restart-on-boot on macOS, Linux, and Windows with the same commands:
+
+```powershell
+npm install -g pm2
+pm2 start server.js --name coldmail-autopilot
+pm2 save
+pm2-startup install   # or: npm install -g pm2-windows-startup && pm2-startup install
+```
+
+</details>
+
 ## Data storage
 
 - Templates, jobs, and send history are stored locally in `data/db.json`.
