@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Auto Email Sender</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="brand-mark">✉️</div>
+    <div>
+      <h1>Cold Email Sender</h1>
+      <p class="subtitle">One template, many hiring inboxes.</p>
+    </div>
+  </div>
+  <div class="header-actions">
+    <div class="palette-picker">
+      <button id="paletteToggleBtn" class="theme-toggle" type="button" title="Choose color theme" aria-label="Choose color theme">🎨</button>
+      <div id="palettePanel" class="palette-panel" hidden>
+        <p class="palette-title">Theme</p>
+        <div id="paletteSwatches" class="palette-swatches"></div>
+        <p class="palette-title">Custom</p>
+        <div class="palette-custom-row">
+          <input id="customAccentInput" type="color" value="#0d7d6f" />
+          <label for="customAccentInput" class="hint">Pick any accent color</label>
+        </div>
+      </div>
+    </div>
+    <button id="themeToggleBtn" class="theme-toggle" type="button" title="Toggle dark/light mode" aria-label="Toggle dark/light mode">🌙</button>
+  </div>
+</header>
+
+<main>
+<div class="layout">
+<div class="layout-main">
+  <section class="card">
+    <div class="section-header">
+      <span class="step-badge">1</span>
+      <div>
+        <h2>Template</h2>
+        <p class="section-desc">Pick a saved subject/body/attachment bundle to send.</p>
+      </div>
+    </div>
+    <div class="section-body">
+      <label>Which template do you want to send?</label>
+      <select id="templateSelect">
+        <option value="">-- Select a saved template --</option>
+      </select>
+      <div id="templatePreview" class="template-preview"></div>
+      <button id="manageTemplatesBtn" type="button" class="ghost-btn">⚙️ Manage templates</button>
+    </div>
+  </section>
+
+  <section class="card" id="templateManager" style="display:none;">
+    <div class="section-header">
+      <span class="step-badge alt">＋</span>
+      <div>
+        <h2>Manage templates</h2>
+        <p class="section-desc">Create, edit, or remove your saved templates.</p>
+      </div>
+    </div>
+    <div class="section-body">
+      <div id="templateList"></div>
+
+      <h3 id="templateFormTitle">New template</h3>
+      <input id="templateEditId" type="hidden" />
+      <label>Name</label>
+      <input id="templateName" type="text" placeholder="e.g. SDE cold outreach" />
+
+      <label>Subject</label>
+      <input id="templateSubject" type="text" placeholder="Application for SDE roles at {{company}}" />
+
+      <label>Body</label>
+      <textarea id="templateBody" rows="10" placeholder="Hi {{company}} team,&#10;&#10;..."></textarea>
+      <p class="hint">Use <code>{{company}}</code> as a placeholder &mdash; it's filled in per recipient when known.</p>
+
+      <label>Attachment (resume, optional &mdash; stored with this template)</label>
+      <input id="templateAttachment" type="file" />
+      <p id="templateCurrentAttachment" class="hint"></p>
+
+      <div class="button-row">
+        <button id="saveTemplateBtn" type="button" class="primary">Save template</button>
+        <button id="cancelTemplateEditBtn" type="button">Cancel</button>
+      </div>
+      <p id="templateMsg" class="hint"></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="section-header">
+      <span class="step-badge">2</span>
+      <div>
+        <h2>Recipients</h2>
+        <p class="section-desc">Guess hiring inboxes from a company name, or paste exact addresses.</p>
+      </div>
+    </div>
+    <div class="section-body">
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="company">By company name</button>
+        <button class="tab-btn" data-tab="exact">Exact email addresses</button>
+      </div>
+
+      <div id="tab-company" class="tab-panel active">
+        <label>Company names (one per line)</label>
+        <textarea id="companies" rows="5" placeholder="Deloitte&#10;Accenture&#10;TCS"></textarea>
+        <button id="guessBtn" type="button">🔍 Guess emails</button>
+        <div id="guessResults"></div>
+      </div>
+
+      <div id="tab-exact" class="tab-panel">
+        <label>Email addresses (one per line, optionally "email, company")</label>
+        <textarea id="exactEmails" rows="6" placeholder="hr@company.com&#10;careers@other.com, OtherCo"></textarea>
+      </div>
+
+      <div class="selected-summary">
+        <span class="count-chip"><strong id="selectedCount">0</strong></span> recipient(s) selected
+      </div>
+      <p id="duplicateWarning" class="hint"></p>
+    </div>
+  </section>
+
+
+</div>
+
+<div class="layout-side">
+  <section class="card">
+    <div class="section-header">
+      <span class="step-badge">3</span>
+      <div>
+        <h2>Schedule</h2>
+        <p class="section-desc">Send right away, at a fixed time, or spread across a window.</p>
+      </div>
+    </div>
+    <div class="section-body">
+      <label class="radio-option"><input type="radio" name="scheduleMode" value="now" checked /> Send now</label>
+      <label class="radio-option"><input type="radio" name="scheduleMode" value="later" /> Schedule for a fixed time</label>
+      <input id="scheduleAt" type="datetime-local" disabled />
+
+      <label class="radio-option"><input type="radio" name="scheduleMode" value="random" /> Randomize within a time window</label>
+      <div id="randomWindowFields" class="random-window">
+        <label>Date</label>
+        <input id="windowDate" type="date" disabled />
+
+        <label>Time window</label>
+        <div class="range-slider" id="timeRangeSlider">
+          <div class="range-slider-track"></div>
+          <div class="range-slider-highlight" id="rangeHighlight"></div>
+          <input id="rangeStart" type="range" min="0" max="1435" step="5" value="540" disabled />
+          <input id="rangeEnd" type="range" min="0" max="1435" step="5" value="1080" disabled />
+        </div>
+        <div class="range-labels">
+          <span id="rangeStartLabel">09:00</span>
+          <span id="rangeEndLabel">18:00</span>
+        </div>
+
+        <button id="checkCapacityBtn" type="button" disabled>Check if this window fits</button>
+        <p id="capacityMsg" class="hint"></p>
+        <p class="hint">Emails are spaced at least 4 minutes apart, max 5 in any 20-minute span.</p>
+        <div id="timelinePreview" class="timeline-preview"></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="submit-bar">
+    <button id="submitBtn" class="primary">🚀 Create job</button>
+    <p id="submitMsg"></p>
+  </div>
+</div>
+</div>
+
+<section class="card">
+  <div class="section-header">
+    <span class="step-badge alt">📋</span>
+    <div>
+      <h2>Jobs</h2>
+      <p class="section-desc">Track everything queued, sending, or completed.</p>
+    </div>
+    <button id="refreshBtn" type="button" class="ghost-btn refresh-btn">⟳ Refresh</button>
+  </div>
+  <div class="section-body">
+    <div id="jobsList"></div>
+  </div>
+</section>
+
+<footer class="sheet-footer">
+  <details id="sentEmailsDetails">
+    <summary id="sentEmailsSummary">📇 View sent emails sheet</summary>
+    <div class="sheet-panel">
+      <button id="downloadSentBtn" type="button" class="ghost-btn">⬇ Download CSV</button>
+      <div id="sentEmailsList"></div>
+    </div>
+  </details>
+</footer>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
