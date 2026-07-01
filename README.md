@@ -327,3 +327,7 @@ No data leaves your machine except the emails themselves, sent directly via Gmai
 ## Disclaimer
 
 Use this tool responsibly and in accordance with Gmail's sending limits and anti-spam policies, and applicable laws (e.g. CAN-SPAM). This project is intended for legitimate, personalized outreach — not bulk/unsolicited spam.
+
+## License
+
+[MIT](LICENSE)

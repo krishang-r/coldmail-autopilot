@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Local tool for sending templated cold emails to hiring teams, with company-name email guessing and scheduling.",
   "main": "server.js",
+  "license": "MIT",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
