@@ -407,6 +407,8 @@ checkCapacityBtn.addEventListener('click', async () => {
 
 const guessBtn = document.getElementById('guessBtn');
 const guessResults = document.getElementById('guessResults');
+const deepVerifyBtn = document.getElementById('deepVerifyBtn');
+const deepVerifyMsg = document.getElementById('deepVerifyMsg');
 
 guessBtn.addEventListener('click', async () => {
   const raw = document.getElementById('companies').value;
@@ -432,6 +434,8 @@ guessBtn.addEventListener('click', async () => {
 
 function renderGuessResults(results) {
   guessResults.innerHTML = '';
+  deepVerifyBtn.hidden = results.every((r) => r.candidates.length === 0);
+  deepVerifyMsg.textContent = '';
   for (const result of results) {
     const group = document.createElement('div');
     group.className = 'company-group';
@@ -470,6 +474,56 @@ function renderGuessResults(results) {
   }
   updateSelectedCount();
 }
+
+const VERIFY_LABELS = {
+  valid: { text: '✅ mailbox exists', className: 'verify-tag verify-valid' },
+  invalid: { text: '❌ mailbox rejected', className: 'verify-tag verify-invalid' },
+  'catch-all': { text: '❔ catch-all domain, can\'t confirm', className: 'verify-tag verify-catchall' },
+  unknown: { text: '❔ no answer (network may block SMTP)', className: 'verify-tag verify-unknown' },
+};
+
+deepVerifyBtn.addEventListener('click', async () => {
+  const rows = Array.from(guessResults.querySelectorAll('.candidate-row'));
+  const emails = rows.map((row) => row.querySelector('input[type="checkbox"]').dataset.email);
+  if (emails.length === 0) return;
+
+  deepVerifyBtn.disabled = true;
+  deepVerifyBtn.textContent = 'Verifying via SMTP (this can take a while)...';
+  deepVerifyMsg.textContent =
+    'Connecting directly to each domain\'s mail server. Some networks block outbound SMTP entirely, in which case results show as "no answer" — that\'s a network limitation, not a bug.';
+  try {
+    const res = await fetch('/api/verify-mailboxes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ candidates: emails.map((email) => ({ email })) }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Verification failed');
+
+    for (const row of rows) {
+      const cb = row.querySelector('input[type="checkbox"]');
+      const status = data.results[cb.dataset.email.toLowerCase()];
+      const info = VERIFY_LABELS[status];
+      if (!info) continue;
+      let tag = row.querySelector('.verify-tag');
+      if (!tag) {
+        tag = document.createElement('span');
+        row.appendChild(tag);
+      }
+      tag.textContent = info.text;
+      tag.className = info.className;
+      if (status === 'invalid') cb.checked = false;
+    }
+    updateSelectedCount();
+    deepVerifyMsg.textContent =
+      'Done. "Catch-all" and "no answer" results are inconclusive, not confirmations — the domain accepts (or didn\'t say) either way.';
+  } catch (err) {
+    deepVerifyMsg.textContent = 'Error: ' + err.message;
+  } finally {
+    deepVerifyBtn.disabled = false;
+    deepVerifyBtn.textContent = '🔬 Deep verify mailboxes (SMTP)';
+  }
+});
 
 const exactEmailsBox = document.getElementById('exactEmails');
 exactEmailsBox.addEventListener('input', updateSelectedCount);

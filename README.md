@@ -4,7 +4,8 @@ A self-hosted Node.js tool for running cold email outreach campaigns to hiring t
 
 ## Features
 
-- **Email guessing** — infers likely recipient email addresses from a list of company names
+- **Email guessing** — infers likely recipient email addresses from a list of company names, checking each candidate domain's mail server (MX records)
+- **Deep mailbox verification (opt-in)** — goes a step further than the domain-level guess by connecting directly to a domain's mail server and probing whether a *specific* address is accepted, via SMTP `RCPT TO` (see [Mailbox verification](#mailbox-verification) below)
 - **Templates** — save reusable subject/body/attachment bundles (with `{{company}}` placeholders) for different outreach styles
 - **Randomized scheduling** — spreads sends across a time window instead of blasting them all at once, with a capacity check to confirm your batch fits before you commit
 - **Local dashboard** — a lightweight web UI (Express + vanilla JS) for managing templates, uploads, and send jobs
@@ -316,13 +317,41 @@ pm2-startup install   # or: npm install -g pm2-windows-startup && pm2-startup in
 
 </details>
 
+## Mailbox verification
+
+The basic "Guess emails" step only checks whether a **domain** has a mail server (an MX record) — it can't tell whether `hr@company.com` specifically exists, so every prefix guess for a domain (`hr@`, `careers@`, `jobs@`, ...) shows as equally "valid" as long as the domain itself accepts mail.
+
+The optional **🔬 Deep verify mailboxes (SMTP)** button goes further: it connects directly to the domain's real mail server and asks it, via a raw SMTP `RCPT TO` command, whether that *specific* address would be accepted — without ever sending `DATA` (no email is actually delivered by this check).
+
+**Read the results honestly:**
+- ✅ **mailbox exists** — the server explicitly accepted that address
+- ❌ **mailbox rejected** — the server explicitly said no such user (auto-unchecked for you)
+- ❔ **catch-all domain** — the server accepts *any* address for that domain (common on Google Workspace/Microsoft 365), so this check can't tell you anything useful — treat it the same as an unverified guess
+- ❔ **no answer** — connection failed, timed out, or the server didn't give a clean answer; this is inconclusive, not a rejection
+
+**Built-in safeguards against getting your IP rate-limited or blocked:**
+- One SMTP connection is reused per domain to check *all* its candidate addresses (`MAIL FROM` once, then multiple `RCPT TO`s), instead of opening a separate connection per address
+- Each address check is spaced out (`SMTP_VERIFY_DELAY_MS`, default 400ms), and there's a pause between domains too (`SMTP_VERIFY_DOMAIN_DELAY_MS`, default 1s)
+- Results are cached locally for 30 days (`data/mailbox-verify-cache.json`, gitignored) so re-checking the same address doesn't re-probe the server
+- A catch-all domain is detected with one probe and then skipped entirely, rather than needlessly probing every prefix
+- Verification is capped at 50 addresses per request and only runs when you explicitly click the button — never automatically
+- It probes using your real `GMAIL_USER` as the `MAIL FROM` address by default (configurable via `SMTP_VERIFY_FROM`), which reads as more legitimate to receiving servers than a forged sender
+
+**What no amount of pacing can fix**, so don't be surprised if results skew toward "no answer":
+- Many networks (most cloud/VPS providers, and some home ISPs) block outbound port 25 entirely to fight spam — if yours does, every check will come back "no answer" regardless of how the addresses are.
+- Mail servers are often more suspicious of connections from residential IPs without reverse-DNS (PTR) records, independent of how carefully requests are paced.
+- None of this is a substitute for actually sending — treat every result here as a probabilistic hint, not a guarantee.
+
+See `.env.example` for all the tuning knobs (`SMTP_VERIFY_DELAY_MS`, `SMTP_VERIFY_DOMAIN_DELAY_MS`, `SMTP_VERIFY_TIMEOUT_MS`, `SMTP_VERIFY_HELO`, `SMTP_VERIFY_FROM`).
+
 ## Data storage
 
 - Templates, jobs, and send history are stored locally in `data/db.json`.
+- Deep-verify mailbox results are cached locally in `data/mailbox-verify-cache.json`.
 - Uploaded attachments are stored in `uploads/`.
 - Logs are written to `logs/`.
 
-No data leaves your machine except the emails themselves, sent directly via Gmail's SMTP servers.
+No data leaves your machine except the emails themselves (sent directly via Gmail's SMTP servers) and, if you use deep mailbox verification, direct SMTP connections to the recipient domains' own mail servers.
 
 ## Disclaimer
 

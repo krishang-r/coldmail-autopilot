@@ -7,6 +7,7 @@ const multer = require('multer');
 
 const store = require('./lib/store');
 const { guessMany } = require('./lib/emailGuesser');
+const { verifyMailboxes } = require('./lib/mailboxVerifier');
 const scheduler = require('./lib/scheduler');
 const logger = require('./lib/logger');
 const randomScheduler = require('./lib/randomScheduler');
@@ -52,6 +53,31 @@ app.post('/api/guess-emails', async (req, res) => {
     }
     const results = await guessMany(companies);
     res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Opt-in, deeper check: connects to each domain's real mail server and asks
+// (via SMTP RCPT TO, without sending anything) whether each specific mailbox
+// is accepted, rather than just confirming the domain itself takes mail.
+app.post('/api/verify-mailboxes', async (req, res) => {
+  try {
+    const { candidates } = req.body;
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      return res.status(400).json({ error: 'candidates must be a non-empty array' });
+    }
+    const normalized = candidates
+      .map((c) => (typeof c === 'string' ? { email: c } : c))
+      .filter((c) => c && typeof c.email === 'string' && c.email.includes('@'));
+    if (normalized.length === 0) {
+      return res.status(400).json({ error: 'no valid email addresses provided' });
+    }
+    if (normalized.length > 50) {
+      return res.status(400).json({ error: 'verify at most 50 addresses at a time' });
+    }
+    const results = await verifyMailboxes(normalized);
+    res.json({ results: Object.fromEntries(results) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
