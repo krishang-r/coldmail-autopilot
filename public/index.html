@@ -52,6 +52,7 @@
         <option value="">-- Select a saved template --</option>
       </select>
       <div id="templatePreview" class="template-preview"></div>
+      <div id="templateSpamWarnings" class="spam-warnings" hidden></div>
       <button id="manageTemplatesBtn" type="button" class="ghost-btn">⚙️ Manage templates</button>
     </div>
   </section>
@@ -91,6 +92,7 @@
         <button id="cancelTemplateEditBtn" type="button">Cancel</button>
       </div>
       <p id="templateMsg" class="hint"></p>
+      <div id="templateEditWarnings" class="spam-warnings" hidden></div>
     </div>
   </section>
 
@@ -173,6 +175,7 @@
 
   <div class="submit-bar">
     <button id="submitBtn" class="primary">🚀 Create job</button>
+    <p id="sendStatus" class="hint"></p>
     <p id="submitMsg"></p>
   </div>
 </div>

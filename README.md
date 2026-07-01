@@ -8,6 +8,7 @@ A self-hosted Node.js tool for running cold email outreach campaigns to hiring t
 - **Deep mailbox verification (opt-in)** — goes a step further than the domain-level guess by connecting directly to a domain's mail server and probing whether a *specific* address is accepted, via SMTP `RCPT TO` (see [Mailbox verification](#mailbox-verification) below)
 - **Templates** — save reusable subject/body/attachment bundles (with `{{company}}` placeholders) for different outreach styles
 - **Randomized scheduling** — spreads sends across a time window instead of blasting them all at once, with a capacity check to confirm your batch fits before you commit
+- **Deliverability guardrails** — List-Unsubscribe header, CAN-SPAM compliance footer, spam-trigger content linting, jittered send timing, and a daily send cap to keep messages out of spam (see [Staying out of spam](#staying-out-of-spam) below)
 - **Local dashboard** — a lightweight web UI (Express + vanilla JS) for managing templates, uploads, and send jobs
 - **Send logging** — tracks what was sent, when, and to whom, stored locally in a JSON file (no external database)
 
@@ -343,6 +344,34 @@ The optional **🔬 Deep verify mailboxes (SMTP)** button goes further: it conne
 - None of this is a substitute for actually sending — treat every result here as a probabilistic hint, not a guarantee.
 
 See `.env.example` for all the tuning knobs (`SMTP_VERIFY_DELAY_MS`, `SMTP_VERIFY_DOMAIN_DELAY_MS`, `SMTP_VERIFY_TIMEOUT_MS`, `SMTP_VERIFY_HELO`, `SMTP_VERIFY_FROM`).
+
+## Staying out of spam
+
+Cold email is exactly the kind of traffic spam filters scrutinize hardest, so the tool builds in the technical hygiene that keeps legitimate outreach in the inbox. Some of it is automatic; some depends on you configuring it and writing good content.
+
+### What the tool does for you automatically
+
+- **`List-Unsubscribe` header** — every message includes a machine-readable unsubscribe (`mailto:`) header. This is one of the strongest positive signals inbox providers (especially Gmail/Yahoo) use, and their bulk-sender rules effectively expect it.
+- **CAN-SPAM compliance footer** — a short opt-out line (and your postal address, if you set `SENDER_ADDRESS`) is appended to each email. Including a real opt-out and physical address is legally required for commercial email and reduces spam-complaint risk. Skipped automatically if your body already contains its own unsubscribe wording; disable entirely with `APPEND_COMPLIANCE_FOOTER=false`.
+- **Daily send cap** — sending stops at `DAILY_SEND_LIMIT` (default 450) messages per day and resumes automatically the next day. Going over your provider's limit (~500/day for a free `gmail.com` account, 2000 for Workspace) gets the account temporarily blocked and damages sender reputation. A job that hits the cap shows a `paused_daily_limit` status and picks up where it left off. Set `DAILY_SEND_LIMIT=0` to disable.
+- **Jittered send timing** — the gap between sends is randomized ±40% around `SEND_DELAY_MS` instead of a robotic fixed interval, and the randomized-window scheduler already spaces sends out (min 4 min apart, max 5 per 20 min).
+- **One recipient per message** — every email is sent individually with a single `To:`, never a giant `To`/`CC`/`BCC` blast.
+- **Authenticated Gmail SMTP** — because mail is sent through Gmail's own servers with your credentials, SPF, DKIM, and DMARC all pass for `gmail.com` with no DNS setup on your part.
+- **Content linter** — when you pick or edit a template, the UI flags common spam triggers (ALL-CAPS subjects, `!!!`, phrases like "act now"/"100% free"/"guarantee", URL shorteners, too many links, non-personalized mass copy). These are advisory warnings — they never block a send, they just tell you what to rephrase.
+- **Low bounce rate** — domain MX checks plus optional [deep mailbox verification](#mailbox-verification) help you avoid emailing dead addresses; high bounce rates are a major spam-reputation killer.
+
+### What still depends on you
+
+No tool can make spammy sending look legitimate. To actually stay in the inbox:
+
+- **Personalize.** Use the `{{company}}` placeholder (and write genuinely relevant copy). Identical mass copy is the easiest thing for filters to catch.
+- **Start slow / warm up.** A brand-new account suddenly sending hundreds of cold emails looks like a compromised account. Ramp up volume gradually over days/weeks.
+- **Keep volume modest and steady.** Even under the daily cap, blasting the maximum every single day from a personal Gmail is risky. Fewer, better-targeted emails outperform volume.
+- **Set a real `SENDER_ADDRESS`** in `.env` so the compliance footer includes a genuine postal address.
+- **Honor opt-outs.** If someone asks to stop, don't email them again — repeated contact drives spam complaints, which hurt you far more than one lost lead.
+- **Watch your content.** Avoid attachments where you can (a resume link often beats a PDF attachment for deliverability), skip image-heavy HTML, and keep links to one or two.
+
+The relevant `.env` knobs: `DAILY_SEND_LIMIT`, `APPEND_COMPLIANCE_FOOTER`, `SENDER_ADDRESS`, `UNSUBSCRIBE_EMAIL`, `REPLY_TO`, and `SEND_DELAY_MS`.
 
 ## Data storage
 

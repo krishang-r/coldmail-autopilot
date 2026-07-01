@@ -8,6 +8,7 @@ const multer = require('multer');
 const store = require('./lib/store');
 const { guessMany } = require('./lib/emailGuesser');
 const { verifyMailboxes } = require('./lib/mailboxVerifier');
+const { spamCheck } = require('./lib/spamCheck');
 const scheduler = require('./lib/scheduler');
 const logger = require('./lib/logger');
 const randomScheduler = require('./lib/randomScheduler');
@@ -81,6 +82,19 @@ app.post('/api/verify-mailboxes', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Advisory content linter: flags spam-trigger patterns in a subject/body so
+// they can be rephrased before sending. Never blocks anything.
+app.post('/api/spam-check', (req, res) => {
+  const { subject = '', body = '', recipientCount = 0 } = req.body || {};
+  res.json({ warnings: spamCheck({ subject, body, recipientCount: Number(recipientCount) || 0 }) });
+});
+
+// How many emails have gone out today vs. the configured daily cap, so the UI
+// can warn before you push the account past its sending limit.
+app.get('/api/send-status', (req, res) => {
+  res.json(scheduler.getDailySendStatus());
 });
 
 // Check whether N recipients fit in a randomized time window before committing to it
@@ -318,12 +332,12 @@ app.post('/api/jobs', (req, res) => {
   }
 });
 
-// Cancel a pending job
+// Cancel a job that hasn't sent yet (pending, or paused for the daily cap)
 app.delete('/api/jobs/:id', (req, res) => {
   const job = store.getJob(req.params.id);
   if (!job) return res.status(404).json({ error: 'not found' });
-  if (job.status !== 'pending') {
-    return res.status(400).json({ error: 'only pending jobs can be cancelled' });
+  if (!['pending', 'paused_daily_limit'].includes(job.status)) {
+    return res.status(400).json({ error: 'only pending or paused jobs can be cancelled' });
   }
   store.deleteJob(req.params.id);
   res.json({ ok: true });

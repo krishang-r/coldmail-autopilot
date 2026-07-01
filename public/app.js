@@ -151,6 +151,8 @@ const templateCurrentAttachment = document.getElementById('templateCurrentAttach
 const templateRemoveAttachmentLabel = document.getElementById('templateRemoveAttachmentLabel');
 const templateRemoveAttachment = document.getElementById('templateRemoveAttachment');
 const templateMsg = document.getElementById('templateMsg');
+const templateSpamWarnings = document.getElementById('templateSpamWarnings');
+const templateEditWarnings = document.getElementById('templateEditWarnings');
 
 let templatesCache = [];
 
@@ -174,10 +176,39 @@ async function loadTemplates() {
   renderTemplateList();
 }
 
+// --- Deliverability / spam-trigger warnings ---
+function renderSpamWarnings(container, warnings) {
+  if (!warnings || warnings.length === 0) {
+    container.hidden = true;
+    container.innerHTML = '';
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML =
+    '<p class="spam-warnings-title">⚠ These may push the email toward spam:</p><ul>' +
+    warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('') +
+    '</ul>';
+}
+
+async function checkSpam({ subject, body, recipientCount }) {
+  try {
+    const res = await fetch('/api/spam-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, body, recipientCount: recipientCount || 0 }),
+    });
+    const data = await res.json();
+    return data.warnings || [];
+  } catch {
+    return [];
+  }
+}
+
 function updateTemplatePreview() {
   const t = templatesCache.find((x) => x.id === templateSelect.value);
   if (!t) {
     templatePreview.innerHTML = '';
+    renderSpamWarnings(templateSpamWarnings, []);
     return;
   }
   templatePreview.innerHTML = `
@@ -185,8 +216,42 @@ function updateTemplatePreview() {
     <div class="preview-body">${escapeHtml(t.body)}</div>
     ${t.attachment ? `<div class="hint">Attachment: ${escapeHtml(t.attachment.originalName)}</div>` : ''}
   `;
+  checkSpam({ subject: t.subject, body: t.body, recipientCount: getAllRecipients().length }).then((w) =>
+    renderSpamWarnings(templateSpamWarnings, w)
+  );
 }
 templateSelect.addEventListener('change', updateTemplatePreview);
+
+// Re-lint the selected template's preview when the recipient count changes
+// (the "not personalized to a big list" warning depends on it). Debounced so
+// typing in the recipients box doesn't spam requests.
+let previewSpamTimer;
+function refreshPreviewSpam() {
+  const t = templatesCache.find((x) => x.id === templateSelect.value);
+  if (!t) return;
+  clearTimeout(previewSpamTimer);
+  previewSpamTimer = setTimeout(async () => {
+    const w = await checkSpam({ subject: t.subject, body: t.body, recipientCount: getAllRecipients().length });
+    renderSpamWarnings(templateSpamWarnings, w);
+  }, 400);
+}
+
+// Live-lint the template being written/edited (debounced).
+let editSpamTimer;
+function scheduleEditSpamCheck() {
+  clearTimeout(editSpamTimer);
+  editSpamTimer = setTimeout(async () => {
+    const subject = templateSubjectInput.value;
+    const body = templateBodyInput.value;
+    if (!subject && !body) {
+      renderSpamWarnings(templateEditWarnings, []);
+      return;
+    }
+    renderSpamWarnings(templateEditWarnings, await checkSpam({ subject, body }));
+  }, 500);
+}
+templateSubjectInput.addEventListener('input', scheduleEditSpamCheck);
+templateBodyInput.addEventListener('input', scheduleEditSpamCheck);
 
 function renderTemplateList() {
   templateList.innerHTML = '';
@@ -232,6 +297,7 @@ function startEditTemplate(id) {
   templateRemoveAttachment.checked = false;
   templateRemoveAttachmentLabel.hidden = !t.attachment;
   templateMsg.textContent = '';
+  scheduleEditSpamCheck();
 }
 
 async function deleteTemplate(id) {
@@ -251,6 +317,7 @@ function resetTemplateForm() {
   templateRemoveAttachment.checked = false;
   templateRemoveAttachmentLabel.hidden = true;
   templateMsg.textContent = '';
+  renderSpamWarnings(templateEditWarnings, []);
 }
 
 document.getElementById('manageTemplatesBtn').addEventListener('click', () => {
@@ -570,10 +637,28 @@ function updateSelectedCount() {
   } else {
     warningEl.textContent = '';
   }
+  refreshPreviewSpam();
 }
 
 const submitBtn = document.getElementById('submitBtn');
 const submitMsg = document.getElementById('submitMsg');
+const sendStatus = document.getElementById('sendStatus');
+
+async function loadSendStatus() {
+  try {
+    const res = await fetch('/api/send-status');
+    const s = await res.json();
+    if (!s.capEnabled) {
+      sendStatus.textContent = `${s.sentToday} sent today (no daily cap set).`;
+      sendStatus.className = 'hint';
+      return;
+    }
+    sendStatus.textContent = `${s.sentToday} / ${s.dailyLimit} sent today — ${s.remaining} left before the daily cap.`;
+    sendStatus.className = s.remaining <= 20 ? 'hint invalid' : 'hint';
+  } catch {
+    /* non-fatal */
+  }
+}
 
 submitBtn.addEventListener('click', async () => {
   const templateId = templateSelect.value;
@@ -629,6 +714,7 @@ submitBtn.addEventListener('click', async () => {
       submitMsg.textContent = 'Sending now.';
     }
     loadJobs();
+    loadSendStatus();
   } catch (err) {
     submitMsg.textContent = 'Error: ' + err.message;
   } finally {
@@ -680,7 +766,7 @@ async function loadJobs() {
           ${job.templateName ? `<span class="hint">(${escapeHtml(job.templateName)})</span>` : ''}
           <span class="status-pill status-${job.status}">${job.status}</span>
         </div>
-        ${job.status === 'pending' ? `<button class="cancel-btn" data-id="${job.id}">Cancel</button>` : ''}
+        ${['pending', 'paused_daily_limit'].includes(job.status) ? `<button class="cancel-btn" data-id="${job.id}">Cancel</button>` : ''}
       </div>
       <div>${job.recipients.length} recipient(s) &mdash; ${sent} sent, ${failed} failed</div>
       <div>${scheduleSummary(job)}</div>
@@ -730,5 +816,7 @@ document.getElementById('refreshBtn').addEventListener('click', loadJobs);
 loadJobs();
 loadTemplates();
 loadSentEmails();
+loadSendStatus();
 setInterval(loadJobs, 15000);
 setInterval(loadSentEmails, 15000);
+setInterval(loadSendStatus, 15000);
