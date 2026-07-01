@@ -148,6 +148,8 @@ const templateSubjectInput = document.getElementById('templateSubject');
 const templateBodyInput = document.getElementById('templateBody');
 const templateAttachmentInput = document.getElementById('templateAttachment');
 const templateCurrentAttachment = document.getElementById('templateCurrentAttachment');
+const templateRemoveAttachmentLabel = document.getElementById('templateRemoveAttachmentLabel');
+const templateRemoveAttachment = document.getElementById('templateRemoveAttachment');
 const templateMsg = document.getElementById('templateMsg');
 
 let templatesCache = [];
@@ -227,6 +229,8 @@ function startEditTemplate(id) {
     ? `Current attachment: ${t.attachment.originalName} (upload a new file to replace it)`
     : '';
   templateAttachmentInput.value = '';
+  templateRemoveAttachment.checked = false;
+  templateRemoveAttachmentLabel.hidden = !t.attachment;
   templateMsg.textContent = '';
 }
 
@@ -244,6 +248,8 @@ function resetTemplateForm() {
   templateBodyInput.value = '';
   templateAttachmentInput.value = '';
   templateCurrentAttachment.textContent = '';
+  templateRemoveAttachment.checked = false;
+  templateRemoveAttachmentLabel.hidden = true;
   templateMsg.textContent = '';
 }
 
@@ -267,6 +273,7 @@ document.getElementById('saveTemplateBtn').addEventListener('click', async () =>
   form.append('body', body);
   const file = templateAttachmentInput.files[0];
   if (file) form.append('attachment', file);
+  if (!file && templateRemoveAttachment.checked) form.append('removeAttachment', 'true');
 
   const id = templateEditId.value;
   const url = id ? `/api/templates/${id}` : '/api/templates';
@@ -367,7 +374,7 @@ const checkCapacityBtn = document.getElementById('checkCapacityBtn');
 const capacityMsg = document.getElementById('capacityMsg');
 
 checkCapacityBtn.addEventListener('click', async () => {
-  const count = getCheckedCandidates().length + parseExactEmails().length;
+  const count = getAllRecipients().length;
   if (count === 0) {
     capacityMsg.textContent = 'Select recipients first.';
     return;
@@ -484,8 +491,21 @@ function getCheckedCandidates() {
   );
 }
 
+function getAllRecipients() {
+  const combined = [...getCheckedCandidates(), ...parseExactEmails()];
+  const seen = new Set();
+  const deduped = [];
+  for (const r of combined) {
+    const key = r.email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(r);
+  }
+  return deduped;
+}
+
 function updateSelectedCount() {
-  const selected = [...getCheckedCandidates(), ...parseExactEmails()];
+  const selected = getAllRecipients();
   document.getElementById('selectedCount').textContent = selected.length;
 
   const duplicates = selected.filter((r) => sentEmailsSet.has(r.email.toLowerCase()));
@@ -503,7 +523,7 @@ const submitMsg = document.getElementById('submitMsg');
 
 submitBtn.addEventListener('click', async () => {
   const templateId = templateSelect.value;
-  const recipients = [...getCheckedCandidates(), ...parseExactEmails()];
+  const recipients = getAllRecipients();
   const scheduleMode = document.querySelector('input[name="scheduleMode"]:checked').value;
   const scheduleAt = scheduleMode === 'later' ? document.getElementById('scheduleAt').value : '';
   const window = scheduleMode === 'random' ? getWindowDates() : null;

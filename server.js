@@ -1,4 +1,5 @@
 require('dotenv').config();
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
@@ -14,6 +15,29 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
+
+// Jobs copy the template's attachment reference at creation time, so don't
+// delete a file an unfinished job still depends on for sending.
+function isAttachmentInUseByUnfinishedJob(attachmentPath) {
+  return store
+    .listJobs()
+    .some(
+      (j) =>
+        !['completed', 'completed_with_errors', 'error'].includes(j.status) &&
+        j.attachment &&
+        j.attachment.path === attachmentPath
+    );
+}
+
+function deleteAttachmentFile(attachment) {
+  if (!attachment || !attachment.path) return;
+  if (isAttachmentInUseByUnfinishedJob(attachment.path)) return;
+  fs.unlink(attachment.path, (err) => {
+    if (err && err.code !== 'ENOENT') {
+      logger.error(`Failed to delete attachment file ${attachment.path}: ${err.message}`);
+    }
+  });
+}
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -103,6 +127,7 @@ app.put('/api/templates/:id', upload.single('attachment'), (req, res) => {
     if (!name || !subject || !body) {
       return res.status(400).json({ error: 'name, subject and body are required' });
     }
+    const oldAttachment = existing.attachment;
     const updated = store.updateTemplate(req.params.id, (t) => {
       t.name = name;
       t.subject = subject;
@@ -113,6 +138,9 @@ app.put('/api/templates/:id', upload.single('attachment'), (req, res) => {
         t.attachment = null;
       }
     });
+    if (req.file || removeAttachment === 'true') {
+      deleteAttachmentFile(oldAttachment);
+    }
     logger.info(`Template ${updated.id} updated ("${updated.name}")`);
     res.json({ template: updated });
   } catch (err) {
@@ -124,6 +152,7 @@ app.delete('/api/templates/:id', (req, res) => {
   const template = store.getTemplate(req.params.id);
   if (!template) return res.status(404).json({ error: 'not found' });
   store.deleteTemplate(req.params.id);
+  deleteAttachmentFile(template.attachment);
   logger.info(`Template ${template.id} deleted ("${template.name}")`);
   res.json({ ok: true });
 });
@@ -192,11 +221,19 @@ app.post('/api/jobs', (req, res) => {
       return res.status(400).json({ error: 'recipients must be a non-empty array' });
     }
 
-    const baseRecipients = recipientList.map((r) => ({
-      email: typeof r === 'string' ? r : r.email,
-      company: typeof r === 'string' ? '' : r.company || '',
-      status: 'pending',
-    }));
+    const seenEmails = new Set();
+    const baseRecipients = [];
+    for (const r of recipientList) {
+      const email = typeof r === 'string' ? r : r.email;
+      const key = String(email).toLowerCase();
+      if (seenEmails.has(key)) continue;
+      seenEmails.add(key);
+      baseRecipients.push({
+        email,
+        company: typeof r === 'string' ? '' : r.company || '',
+        status: 'pending',
+      });
+    }
 
     const mode = schedulingMode === 'random' ? 'random' : scheduleAt ? 'fixed' : 'now';
 
