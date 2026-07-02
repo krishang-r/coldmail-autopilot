@@ -246,10 +246,14 @@ launchctl load ~/Library/LaunchAgents/com.yourname.coldmailautopilot.plist
 
 `RunAtLoad` starts it at login; `KeepAlive` restarts it if it ever exits/crashes. It now runs regardless of whether any terminal is open.
 
-To stop it:
+If you use a label other than `com.yourname.coldmailautopilot`, set `LAUNCH_AGENT_LABEL` in `.env` to the same value — it's only used so the app's "port already in use" message points at the right plist filename.
+
+To restart it after changing `.env` or the code (needed for those to take effect — UI changes are read live and don't need a restart):
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.yourname.coldmailautopilot.plist
+launchctl load   ~/Library/LaunchAgents/com.yourname.coldmailautopilot.plist
+launchctl list | grep coldmail   # a "0" in the second column means a clean start
 ```
 
 </details>

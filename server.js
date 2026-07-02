@@ -16,6 +16,11 @@ const sendHours = require('./lib/sendHours');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Label of the macOS LaunchAgent that runs this app in the background, used
+// only to make the "port already in use" hint below point at the right plist.
+// Override it in .env to match whatever you named your plist.
+const LAUNCH_AGENT_LABEL = process.env.LAUNCH_AGENT_LABEL || 'com.yourname.coldmailautopilot';
+
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
 
 // Jobs copy the template's attachment reference at creation time, so don't
@@ -378,9 +383,9 @@ httpServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(
       `\nPort ${PORT} is already in use - the background service (LaunchAgent ` +
-        `com.krishang.coldmailautopilot) is likely already running the app.\n` +
+        `${LAUNCH_AGENT_LABEL}) is likely already running the app.\n` +
         `Just open http://localhost:${PORT} - you don't need to start it manually.\n` +
-        `To stop the background service: launchctl unload ~/Library/LaunchAgents/com.krishang.coldmailautopilot.plist\n`
+        `To stop the background service: launchctl unload ~/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist\n`
     );
     process.exit(1);
   }
