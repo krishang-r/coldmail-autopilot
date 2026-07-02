@@ -7,11 +7,11 @@ const multer = require('multer');
 
 const store = require('./lib/store');
 const { guessMany } = require('./lib/emailGuesser');
-const { verifyMailboxes } = require('./lib/mailboxVerifier');
 const { spamCheck } = require('./lib/spamCheck');
 const scheduler = require('./lib/scheduler');
 const logger = require('./lib/logger');
 const randomScheduler = require('./lib/randomScheduler');
+const sendHours = require('./lib/sendHours');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -59,31 +59,6 @@ app.post('/api/guess-emails', async (req, res) => {
   }
 });
 
-// Opt-in, deeper check: connects to each domain's real mail server and asks
-// (via SMTP RCPT TO, without sending anything) whether each specific mailbox
-// is accepted, rather than just confirming the domain itself takes mail.
-app.post('/api/verify-mailboxes', async (req, res) => {
-  try {
-    const { candidates } = req.body;
-    if (!Array.isArray(candidates) || candidates.length === 0) {
-      return res.status(400).json({ error: 'candidates must be a non-empty array' });
-    }
-    const normalized = candidates
-      .map((c) => (typeof c === 'string' ? { email: c } : c))
-      .filter((c) => c && typeof c.email === 'string' && c.email.includes('@'));
-    if (normalized.length === 0) {
-      return res.status(400).json({ error: 'no valid email addresses provided' });
-    }
-    if (normalized.length > 50) {
-      return res.status(400).json({ error: 'verify at most 50 addresses at a time' });
-    }
-    const results = await verifyMailboxes(normalized);
-    res.json({ results: Object.fromEntries(results) });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Advisory content linter: flags spam-trigger patterns in a subject/body so
 // they can be rephrased before sending. Never blocks anything.
 app.post('/api/spam-check', (req, res) => {
@@ -94,7 +69,7 @@ app.post('/api/spam-check', (req, res) => {
 // How many emails have gone out today vs. the configured daily cap, so the UI
 // can warn before you push the account past its sending limit.
 app.get('/api/send-status', (req, res) => {
-  res.json(scheduler.getDailySendStatus());
+  res.json({ ...scheduler.getDailySendStatus(), sendHours: sendHours.describe() });
 });
 
 // Check whether N recipients fit in a randomized time window before committing to it
@@ -241,7 +216,7 @@ app.get('/api/jobs/:id', (req, res) => {
 // Create a new job (send now or scheduled) from a saved template
 app.post('/api/jobs', (req, res) => {
   try {
-    const { templateId, recipients, scheduleAt, schedulingMode, windowStart, windowEnd } = req.body;
+    const { templateId, recipients, scheduleAt, schedulingMode, windowStart, windowEnd, fallbackMode } = req.body;
     if (!templateId) {
       return res.status(400).json({ error: 'templateId is required - pick a template to send' });
     }
@@ -277,6 +252,24 @@ app.post('/api/jobs', (req, res) => {
 
     const mode = schedulingMode === 'random' ? 'random' : scheduleAt ? 'fixed' : 'now';
 
+    // Fallback mode (default on): only the FIRST address per company is
+    // actually emailed; the rest are held as status 'fallback' and only get
+    // promoted to 'pending' if an earlier candidate for that company bounces
+    // (see lib/bounceWatcher.js). Recipients with no company can't be grouped
+    // and are all sent. Pass fallbackMode: false to email every address.
+    const useFallbacks = fallbackMode !== false && fallbackMode !== 'false';
+    if (useFallbacks) {
+      const seenCompanies = new Set();
+      for (const r of baseRecipients) {
+        const company = (r.company || '').trim().toLowerCase();
+        if (!company) continue;
+        if (seenCompanies.has(company)) r.status = 'fallback';
+        else seenCompanies.add(company);
+      }
+    }
+    const activeRecipients = baseRecipients.filter((r) => r.status === 'pending');
+    const fallbackCount = baseRecipients.length - activeRecipients.length;
+
     let jobRecipients = baseRecipients;
     let jobScheduleAt = scheduleAt || null;
     let jobWindow = null;
@@ -287,9 +280,31 @@ app.post('/api/jobs', (req, res) => {
       if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
         return res.status(400).json({ error: 'windowStart must be before windowEnd' });
       }
+      // A window entirely outside the allowed sending hours would have every
+      // "randomized" time silently held until the next workday morning by the
+      // send gate - the schedule the user picked would be fiction. Reject it
+      // up front instead so they can pick a window inside business hours
+      // (sends timed like a human's are far less likely to be flagged).
+      let anyAllowed = false;
+      for (let t = start.getTime(); t <= end.getTime(); t += 15 * 60 * 1000) {
+        if (sendHours.isAllowed(new Date(t))) {
+          anyAllowed = true;
+          break;
+        }
+      }
+      if (!anyAllowed) {
+        return res.status(400).json({
+          error:
+            `This window falls entirely outside the allowed sending hours (${sendHours.describe()}). ` +
+            `Emails sent at night or on weekends look automated to spam filters (and go unread), ` +
+            `so pick a window inside those hours - or change SEND_HOURS_START/END in .env.`,
+        });
+      }
       let times;
       try {
-        times = randomScheduler.generateRandomTimes(baseRecipients.length, start, end);
+        // Only the active recipients need slots in the window; a promoted
+        // fallback gets sendAt = now at promotion time.
+        times = randomScheduler.generateRandomTimes(activeRecipients.length, start, end);
       } catch (err) {
         if (err.code === 'CAPACITY_EXCEEDED') {
           return res.status(400).json({
@@ -300,7 +315,10 @@ app.post('/api/jobs', (req, res) => {
         }
         throw err;
       }
-      jobRecipients = baseRecipients.map((r, i) => ({ ...r, sendAt: times[i].toISOString() }));
+      let slot = 0;
+      jobRecipients = baseRecipients.map((r) =>
+        r.status === 'pending' ? { ...r, sendAt: times[slot++].toISOString() } : { ...r }
+      );
       jobScheduleAt = null;
       jobWindow = { start: start.toISOString(), end: end.toISOString() };
     }
@@ -322,7 +340,10 @@ app.post('/api/jobs', (req, res) => {
 
     store.addJob(job);
     logger.info(
-      `Job ${job.id} created from template "${template.name}" ("${job.subject}"), ${job.recipients.length} recipient(s), mode=${mode}` +
+      `Job ${job.id} created from template "${template.name}" ("${job.subject}"): ` +
+        `${activeRecipients.length} recipient(s) to email` +
+        (fallbackCount > 0 ? ` + ${fallbackCount} held as bounce fallback(s)` : '') +
+        `, mode=${mode}` +
         (mode === 'fixed' ? ` scheduled for ${jobScheduleAt}` : '') +
         (mode === 'random' ? ` window ${jobWindow.start} - ${jobWindow.end}` : '')
     );
@@ -332,14 +353,19 @@ app.post('/api/jobs', (req, res) => {
   }
 });
 
-// Cancel a job that hasn't sent yet (pending, or paused for the daily cap)
+// Cancel a job that hasn't finished. With the enforced 4-minute spacing a job
+// can be mid-send for a long time, so 'sending' jobs are cancellable too -
+// the scheduler checks the store before every send and stops if the job is
+// gone (already-sent emails obviously can't be recalled).
 app.delete('/api/jobs/:id', (req, res) => {
   const job = store.getJob(req.params.id);
   if (!job) return res.status(404).json({ error: 'not found' });
-  if (!['pending', 'paused_daily_limit'].includes(job.status)) {
-    return res.status(400).json({ error: 'only pending or paused jobs can be cancelled' });
+  if (!['pending', 'paused_daily_limit', 'sending'].includes(job.status)) {
+    return res.status(400).json({ error: 'only pending, paused or in-progress jobs can be cancelled' });
   }
   store.deleteJob(req.params.id);
+  const sentSoFar = job.recipients.filter((r) => r.status === 'sent').length;
+  logger.info(`Job ${job.id} cancelled by user (status was ${job.status}, ${sentSoFar}/${job.recipients.length} already sent)`);
   res.json({ ok: true });
 });
 

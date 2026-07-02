@@ -115,8 +115,7 @@
         <textarea id="companies" rows="5" placeholder="Deloitte&#10;Accenture&#10;TCS"></textarea>
         <button id="guessBtn" type="button">🔍 Guess emails</button>
         <div id="guessResults"></div>
-        <button id="deepVerifyBtn" type="button" class="ghost-btn" hidden>🔬 Deep verify mailboxes (SMTP)</button>
-        <p id="deepVerifyMsg" class="hint"></p>
+        <p class="hint">Guesses can't be verified up front (that's normal). Instead, if a sent guess bounces, the app detects it and automatically emails the next candidate for that company &mdash; and remembers bounced addresses for 30 days so they're never tried again (repeat bounces are what get senders flagged).</p>
       </div>
 
       <div id="tab-exact" class="tab-panel">
@@ -127,6 +126,11 @@
       <div class="selected-summary">
         <span class="count-chip"><strong id="selectedCount">0</strong></span> recipient(s) selected
       </div>
+      <label class="radio-option">
+        <input id="fallbackMode" type="checkbox" checked />
+        One email per company &mdash; extra addresses become bounce fallbacks (recommended)
+      </label>
+      <p id="fallbackSummary" class="hint">If the first address for a company bounces, the next candidate is emailed automatically. Uncheck to email every selected address.</p>
       <p id="duplicateWarning" class="hint"></p>
     </div>
   </section>
@@ -144,6 +148,7 @@
       </div>
     </div>
     <div class="section-body">
+      <p class="hint">All three modes follow the same guardrails, because bursts, odd hours and volume spikes are what spam filters flag: sends are at least 4 minutes apart (max 5 per 20 minutes, shared across jobs), only go out during business hours (weekday sends outside them are held until the window reopens), and a daily cap ramps up gradually while the account builds sender reputation.</p>
       <label class="radio-option"><input type="radio" name="scheduleMode" value="now" checked /> Send now</label>
       <label class="radio-option"><input type="radio" name="scheduleMode" value="later" /> Schedule for a fixed time</label>
       <input id="scheduleAt" type="datetime-local" disabled />

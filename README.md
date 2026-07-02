@@ -1,14 +1,14 @@
 # Cold Mail Autopilot
 
-A self-hosted Node.js tool for running cold email outreach campaigns to hiring teams, entirely from your own machine.
+A self-hosted Node.js tool for sending personalized job-application emails to hiring teams — one relevant, tailored message per company, entirely from your own machine. It is built for individual outreach about opportunities, **not** bulk/unsolicited marketing, and its guardrails exist to keep those genuine applications out of the spam folder.
 
 ## Features
 
-- **Email guessing** — infers likely recipient email addresses from a list of company names, checking each candidate domain's mail server (MX records)
-- **Deep mailbox verification (opt-in)** — goes a step further than the domain-level guess by connecting directly to a domain's mail server and probing whether a *specific* address is accepted, via SMTP `RCPT TO` (see [Mailbox verification](#mailbox-verification) below)
+- **Email guessing** — infers likely recipient email addresses from a list of company names (across `.com`, `.in`, `.co.in`, `.co`, `.ai`, `.io`), checking each candidate domain's mail server (MX records)
+- **Bounce-based verification with automatic fallback** — instead of pre-probing mailboxes (impossible on most home networks and annoying for recipients), each company gets one email; if it bounces, the next guessed address is tried automatically and the dead address is remembered (see [Mailbox verification](#mailbox-verification-bounce-based-fallback) below)
 - **Templates** — save reusable subject/body/attachment bundles (with `{{company}}` placeholders) for different outreach styles
 - **Randomized scheduling** — spreads sends across a time window instead of blasting them all at once, with a capacity check to confirm your batch fits before you commit
-- **Deliverability guardrails** — List-Unsubscribe header, CAN-SPAM compliance footer, spam-trigger content linting, jittered send timing, and a daily send cap to keep messages out of spam (see [Staying out of spam](#staying-out-of-spam) below)
+- **Deliverability guardrails** — global send pacing, business-hours-only sending, a warm-up ramp for new senders, spam-trigger content linting, and a daily send cap (see [Staying out of spam](#staying-out-of-spam) below)
 - **Local dashboard** — a lightweight web UI (Express + vanilla JS) for managing templates, uploads, and send jobs
 - **Send logging** — tracks what was sent, when, and to whom, stored locally in a JSON file (no external database)
 
@@ -160,7 +160,6 @@ GMAIL_USER=your.email@gmail.com
 GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx
 SENDER_NAME=Your Name
 PORT=47281
-SEND_DELAY_MS=4000
 ```
 
 | Variable              | Description                                                              |
@@ -169,7 +168,10 @@ SEND_DELAY_MS=4000
 | `GMAIL_APP_PASSWORD`   | The 16-character App Password generated in step 4 (not your login password) |
 | `SENDER_NAME`          | Display name used in the "From" field                                    |
 | `PORT`                 | Port the local web app runs on                                           |
-| `SEND_DELAY_MS`        | Delay between outgoing emails, in milliseconds, to avoid rate limits/spam flags |
+
+Also **enable IMAP** on the account (Gmail → Settings → See all settings → Forwarding and POP/IMAP → Enable IMAP). The app watches your inbox for bounce reports after each send so it can automatically retry the next guessed address for a company — see [bounce-based fallback](#mailbox-verification-bounce-based-fallback).
+
+Send pacing is not configurable by design: every outgoing email — whichever scheduling mode you pick — is spaced at least 4 minutes from the previous one, with at most 5 sends in any 20-minute span, shared across all jobs.
 
 `.env` is gitignored — never commit it.
 
@@ -318,69 +320,60 @@ pm2-startup install   # or: npm install -g pm2-windows-startup && pm2-startup in
 
 </details>
 
-## Mailbox verification
+## Mailbox verification: bounce-based fallback
 
-The basic "Guess emails" step only checks whether a **domain** has a mail server (an MX record) — it can't tell whether `hr@company.com` specifically exists, so every prefix guess for a domain (`hr@`, `careers@`, `jobs@`, ...) shows as equally "valid" as long as the domain itself accepts mail.
+The "Guess emails" step checks whether a **domain** has a mail server (an MX record) — it can't tell whether `hr@company.com` specifically exists, so every prefix guess for a live domain (`hr@`, `careers@`, `jobs@`, ...) is an unverified guess. Guessed domains now include startup-typical TLDs too (`.com`, `.in`, `.co.in`, `.co`, `.ai`, `.io`), each individually MX-checked.
 
-The optional **🔬 Deep verify mailboxes (SMTP)** button goes further: it connects directly to the domain's real mail server and asks it, via a raw SMTP `RCPT TO` command, whether that *specific* address would be accepted — without ever sending `DATA` (no email is actually delivered by this check).
+There is deliberately **no pre-verification step**. Probing mailboxes over SMTP doesn't work from home/mobile networks (outbound port 25 is blocked, so every probe returns "no answer"), and sending "is this the right address?" test emails puts a junk email in a real recruiter's inbox before your actual one. Instead, the cold email itself is the test:
 
-**Read the results honestly:**
-- ✅ **mailbox exists** — the server explicitly accepted that address
-- ❌ **mailbox rejected** — the server explicitly said no such user (auto-unchecked for you)
-- ❔ **catch-all domain** — the server accepts *any* address for that domain (common on Google Workspace/Microsoft 365), so this check can't tell you anything useful — treat it the same as an unverified guess
-- ❔ **no answer** — connection failed, timed out, or the server didn't give a clean answer; this is inconclusive, not a rejection
+1. With **"One email per company"** checked (the default, in the Recipients section), a job only emails the *first* selected address per company — `hr@dhan.com`, say. The other selected candidates (`careers@`, `jobs@`, ...) are stored in the job with a `fallback` status and are **not** sent.
+2. After every send, a background watcher ([lib/bounceWatcher.js](lib/bounceWatcher.js)) polls your own inbox over IMAP (every 60s, for `BOUNCE_WATCH_MS` ≈ 45 min per send) for bounce reports from mailer-daemon/postmaster. Instant rejections (Gmail's synchronous 5xx) are caught at send time without waiting.
+3. When a send bounces, the address is marked **bounced**, removed from the sent-emails sheet, cached as invalid for 30 days, and **the next fallback candidate for that company is promoted and sent automatically** (under the normal 4-min/5-per-20-min pacing).
 
-**Built-in safeguards against getting your IP rate-limited or blocked:**
-- One SMTP connection is reused per domain to check *all* its candidate addresses (`MAIL FROM` once, then multiple `RCPT TO`s), instead of opening a separate connection per address
-- Each address check is spaced out (`SMTP_VERIFY_DELAY_MS`, default 400ms), and there's a pause between domains too (`SMTP_VERIFY_DOMAIN_DELAY_MS`, default 1s)
-- Results are cached locally for 30 days (`data/mailbox-verify-cache.json`, gitignored) so re-checking the same address doesn't re-probe the server
-- A catch-all domain is detected with one probe and then skipped entirely, rather than needlessly probing every prefix
-- Verification is capped at 50 addresses per request and only runs when you explicitly click the button — never automatically
-- It probes using your real `GMAIL_USER` as the `MAIL FROM` address by default (configurable via `SMTP_VERIFY_FROM`), which reads as more legitimate to receiving servers than a forged sender
+4. Addresses that bounced before show up as **"❌ bounced before — auto-unticked"** in future guess results, because re-sending to a known-dead address is the single strongest "this sender is a spammer scraping addresses" signal a mailbox provider can see.
 
-**What no amount of pacing can fix**, so don't be surprised if results skew toward "no answer":
-- Many networks (most cloud/VPS providers, and some home ISPs) block outbound port 25 entirely to fight spam — if yours does, every check will come back "no answer" regardless of how the addresses are.
-- Mail servers are often more suspicious of connections from residential IPs without reverse-DNS (PTR) records, independent of how carefully requests are paced.
-- None of this is a substitute for actually sending — treat every result here as a probabilistic hint, not a guarantee.
+Why this beats pre-verification: no extra email ever lands in a real person's inbox, it works on any network, and each company still ends up with at most one delivered email. The trade-offs: bounces land on your sending account (a handful is normal and harmless — keep guess lists sensible), and a very slow receiving server can bounce after the watch window, in which case the fallback isn't tried automatically.
 
-See `.env.example` for all the tuning knobs (`SMTP_VERIFY_DELAY_MS`, `SMTP_VERIFY_DOMAIN_DELAY_MS`, `SMTP_VERIFY_TIMEOUT_MS`, `SMTP_VERIFY_HELO`, `SMTP_VERIFY_FROM`).
+Uncheck "One email per company" to email every selected address instead; bounce detection still runs, there's just nothing to fall back to.
 
 ## Staying out of spam
 
-Cold email is exactly the kind of traffic spam filters scrutinize hardest, so the tool builds in the technical hygiene that keeps legitimate outreach in the inbox. Some of it is automatic; some depends on you configuring it and writing good content.
+Unsolicited email from an unknown sender is exactly the kind of traffic spam filters scrutinize hardest — even when it's a genuine, personalized job application. The tool builds in the technical hygiene that keeps legitimate outreach in the inbox. Some of it is automatic; some depends on you configuring it and writing good content.
 
 ### What the tool does for you automatically
 
-- **`List-Unsubscribe` header** — every message includes a machine-readable unsubscribe (`mailto:`) header. This is one of the strongest positive signals inbox providers (especially Gmail/Yahoo) use, and their bulk-sender rules effectively expect it.
-- **CAN-SPAM compliance footer** — a short opt-out line (and your postal address, if you set `SENDER_ADDRESS`) is appended to each email. Including a real opt-out and physical address is legally required for commercial email and reduces spam-complaint risk. Skipped automatically if your body already contains its own unsubscribe wording; disable entirely with `APPEND_COMPLIANCE_FOOTER=false`.
+- **Sent exactly as written** — no unsubscribe footer, postal address, or `List-Unsubscribe` header is ever added. Those are bulk-mail conventions; this tool sends personal 1:1 job applications, so anything appended would only make a human email read as mass marketing (to the recipient and to spam filters alike).
 - **Daily send cap** — sending stops at `DAILY_SEND_LIMIT` (default 450) messages per day and resumes automatically the next day. Going over your provider's limit (~500/day for a free `gmail.com` account, 2000 for Workspace) gets the account temporarily blocked and damages sender reputation. A job that hits the cap shows a `paused_daily_limit` status and picks up where it left off. Set `DAILY_SEND_LIMIT=0` to disable.
-- **Jittered send timing** — the gap between sends is randomized ±40% around `SEND_DELAY_MS` instead of a robotic fixed interval, and the randomized-window scheduler already spaces sends out (min 4 min apart, max 5 per 20 min).
+- **Global send pacing** — every outgoing email, in *all three* scheduling modes ("send now", fixed time, randomized window), passes through one shared gate: at least 4 minutes between sends and at most 5 sends in any rolling 20-minute span, across all jobs at once, with random jitter on top so the cadence doesn't look robotic. *Why:* bursts of identical mail from one account are the most basic bulk-sender signature there is. A "send now" job with 20 recipients therefore drips out over ~1.5 hours by design.
+- **Business-hours sending** — sends only go out between `SEND_HOURS_START` and `SEND_HOURS_END` (default 09:00–18:00), Monday–Friday (`SEND_ON_WEEKENDS=false`); anything that comes due outside that window is held, not dropped, until it reopens. *Why:* a 3 a.m. or Sunday timestamp is a classic automation fingerprint — real applicants email recruiters during working hours, and off-hours mail goes unread anyway. Randomized windows placed entirely outside these hours are rejected at creation so the schedule you see is the schedule that happens.
+- **Warm-up ramp** — the enforced daily cap starts at `WARMUP_START_LIMIT` (default 20) in the week of your first-ever send and roughly doubles each week until it reaches `DAILY_SEND_LIMIT`. *Why:* providers score senders on history; an account that suddenly goes from a handful of emails a day to hundreds looks exactly like a compromised or freshly-bought spam account, even when every message is legitimate. The dashboard shows which warm-up week you're in.
 - **One recipient per message** — every email is sent individually with a single `To:`, never a giant `To`/`CC`/`BCC` blast.
 - **Authenticated Gmail SMTP** — because mail is sent through Gmail's own servers with your credentials, SPF, DKIM, and DMARC all pass for `gmail.com` with no DNS setup on your part.
 - **Content linter** — when you pick or edit a template, the UI flags common spam triggers (ALL-CAPS subjects, `!!!`, phrases like "act now"/"100% free"/"guarantee", URL shorteners, too many links, non-personalized mass copy). These are advisory warnings — they never block a send, they just tell you what to rephrase.
-- **Low bounce rate** — domain MX checks plus optional [deep mailbox verification](#mailbox-verification) help you avoid emailing dead addresses; high bounce rates are a major spam-reputation killer.
+- **Low bounce rate** — [bounce-based fallback](#mailbox-verification-bounce-based-fallback) sends only one address per company, detects bounces via IMAP, marks bounced addresses invalid for 30 days so they're never retried, and keeps your "sent" records honest. *Why:* bounce rate is the metric receivers punish hardest — repeatedly mailing dead addresses is how address-scraping spammers behave.
 
 ### What still depends on you
 
 No tool can make spammy sending look legitimate. To actually stay in the inbox:
 
 - **Personalize.** Use the `{{company}}` placeholder (and write genuinely relevant copy). Identical mass copy is the easiest thing for filters to catch.
-- **Start slow / warm up.** A brand-new account suddenly sending hundreds of cold emails looks like a compromised account. Ramp up volume gradually over days/weeks.
-- **Keep volume modest and steady.** Even under the daily cap, blasting the maximum every single day from a personal Gmail is risky. Fewer, better-targeted emails outperform volume.
-- **Set a real `SENDER_ADDRESS`** in `.env` so the compliance footer includes a genuine postal address.
-- **Honor opt-outs.** If someone asks to stop, don't email them again — repeated contact drives spam complaints, which hurt you far more than one lost lead.
+- **Keep volume modest and steady.** The warm-up ramp enforces a gradual start, but even at full cap, blasting the maximum every single day from a personal Gmail is risky. Fewer, better-targeted emails outperform volume.
+- **Write to get replies.** A reply is the strongest positive reputation signal Gmail has. End with a short, specific question ("Is your team hiring backend interns this quarter?").
+- **Use an aged account.** A long-lived account with normal activity gets far more benefit of the doubt than one created last week.
+- **Honor replies asking you to stop.** If someone replies asking not to be contacted, don't email them or their company again — a spam complaint hurts you far more than one lost lead.
 - **Watch your content.** Avoid attachments where you can (a resume link often beats a PDF attachment for deliverability), skip image-heavy HTML, and keep links to one or two.
+- **One touch per company.** The duplicate warning only matches exact addresses — emailing `careers@x.com` a week after `hr@x.com` still lands with the same team. One email (plus at most one follow-up) per company per few weeks.
 
-The relevant `.env` knobs: `DAILY_SEND_LIMIT`, `APPEND_COMPLIANCE_FOOTER`, `SENDER_ADDRESS`, `UNSUBSCRIBE_EMAIL`, `REPLY_TO`, and `SEND_DELAY_MS`.
+The relevant `.env` knobs: `DAILY_SEND_LIMIT`, `WARMUP_START_LIMIT`, `SEND_HOURS_START`/`SEND_HOURS_END`, `SEND_ON_WEEKENDS`, and `REPLY_TO`. (Send pacing is deliberately not configurable.)
 
 ## Data storage
 
 - Templates, jobs, and send history are stored locally in `data/db.json`.
-- Deep-verify mailbox results are cached locally in `data/mailbox-verify-cache.json`.
+- Addresses that bounced (known-invalid for 30 days) are cached locally in `data/mailbox-verify-cache.json`.
 - Uploaded attachments are stored in `uploads/`.
 - Logs are written to `logs/`.
 
-No data leaves your machine except the emails themselves (sent directly via Gmail's SMTP servers) and, if you use deep mailbox verification, direct SMTP connections to the recipient domains' own mail servers.
+No data leaves your machine except the emails themselves (sent directly via Gmail's SMTP servers); bounce detection only reads your own inbox over IMAP.
 
 ## Disclaimer
 

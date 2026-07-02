@@ -441,7 +441,9 @@ const checkCapacityBtn = document.getElementById('checkCapacityBtn');
 const capacityMsg = document.getElementById('capacityMsg');
 
 checkCapacityBtn.addEventListener('click', async () => {
-  const count = getAllRecipients().length;
+  // Fallbacks don't get a slot in the window, so capacity only needs to
+  // cover the addresses that will actually be emailed up front.
+  const count = getActiveRecipientCount();
   if (count === 0) {
     capacityMsg.textContent = 'Select recipients first.';
     return;
@@ -474,8 +476,8 @@ checkCapacityBtn.addEventListener('click', async () => {
 
 const guessBtn = document.getElementById('guessBtn');
 const guessResults = document.getElementById('guessResults');
-const deepVerifyBtn = document.getElementById('deepVerifyBtn');
-const deepVerifyMsg = document.getElementById('deepVerifyMsg');
+const fallbackModeCheckbox = document.getElementById('fallbackMode');
+const fallbackSummary = document.getElementById('fallbackSummary');
 
 guessBtn.addEventListener('click', async () => {
   const raw = document.getElementById('companies').value;
@@ -501,8 +503,6 @@ guessBtn.addEventListener('click', async () => {
 
 function renderGuessResults(results) {
   guessResults.innerHTML = '';
-  deepVerifyBtn.hidden = results.every((r) => r.candidates.length === 0);
-  deepVerifyMsg.textContent = '';
   for (const result of results) {
     const group = document.createElement('div');
     group.className = 'company-group';
@@ -515,19 +515,27 @@ function renderGuessResults(results) {
       row.className = 'candidate-row';
       const cb = document.createElement('input');
       cb.type = 'checkbox';
-      cb.checked = candidate.domainValid;
+      // Never pre-tick an address that already bounced once - re-sending to a
+      // known-dead address is the fastest way to get the account flagged.
+      cb.checked = candidate.domainValid && !candidate.knownInvalid;
       cb.dataset.email = candidate.email;
       cb.dataset.company = result.company;
       cb.addEventListener('change', updateSelectedCount);
       const label = document.createElement('span');
       label.textContent = candidate.email;
-      label.className = candidate.domainValid ? 'valid' : 'invalid';
+      label.className = candidate.domainValid && !candidate.knownInvalid ? 'valid' : 'invalid';
       row.appendChild(cb);
       row.appendChild(label);
       if (!candidate.domainValid) {
         const note = document.createElement('small');
         note.textContent = '(no mail server found for this domain)';
         row.appendChild(note);
+      }
+      if (candidate.knownInvalid) {
+        const tag = document.createElement('span');
+        tag.className = 'verify-tag verify-invalid';
+        tag.textContent = '❌ bounced before — auto-unticked';
+        row.appendChild(tag);
       }
       if (sentEmailsSet.has(candidate.email.toLowerCase())) {
         const tag = document.createElement('span');
@@ -542,58 +550,9 @@ function renderGuessResults(results) {
   updateSelectedCount();
 }
 
-const VERIFY_LABELS = {
-  valid: { text: '✅ mailbox exists', className: 'verify-tag verify-valid' },
-  invalid: { text: '❌ mailbox rejected', className: 'verify-tag verify-invalid' },
-  'catch-all': { text: '❔ catch-all domain, can\'t confirm', className: 'verify-tag verify-catchall' },
-  unknown: { text: '❔ no answer (network may block SMTP)', className: 'verify-tag verify-unknown' },
-};
-
-deepVerifyBtn.addEventListener('click', async () => {
-  const rows = Array.from(guessResults.querySelectorAll('.candidate-row'));
-  const emails = rows.map((row) => row.querySelector('input[type="checkbox"]').dataset.email);
-  if (emails.length === 0) return;
-
-  deepVerifyBtn.disabled = true;
-  deepVerifyBtn.textContent = 'Verifying via SMTP (this can take a while)...';
-  deepVerifyMsg.textContent =
-    'Connecting directly to each domain\'s mail server. Some networks block outbound SMTP entirely, in which case results show as "no answer" — that\'s a network limitation, not a bug.';
-  try {
-    const res = await fetch('/api/verify-mailboxes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ candidates: emails.map((email) => ({ email })) }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Verification failed');
-
-    for (const row of rows) {
-      const cb = row.querySelector('input[type="checkbox"]');
-      const status = data.results[cb.dataset.email.toLowerCase()];
-      const info = VERIFY_LABELS[status];
-      if (!info) continue;
-      let tag = row.querySelector('.verify-tag');
-      if (!tag) {
-        tag = document.createElement('span');
-        row.appendChild(tag);
-      }
-      tag.textContent = info.text;
-      tag.className = info.className;
-      if (status === 'invalid') cb.checked = false;
-    }
-    updateSelectedCount();
-    deepVerifyMsg.textContent =
-      'Done. "Catch-all" and "no answer" results are inconclusive, not confirmations — the domain accepts (or didn\'t say) either way.';
-  } catch (err) {
-    deepVerifyMsg.textContent = 'Error: ' + err.message;
-  } finally {
-    deepVerifyBtn.disabled = false;
-    deepVerifyBtn.textContent = '🔬 Deep verify mailboxes (SMTP)';
-  }
-});
-
 const exactEmailsBox = document.getElementById('exactEmails');
 exactEmailsBox.addEventListener('input', updateSelectedCount);
+fallbackModeCheckbox.addEventListener('change', updateSelectedCount);
 
 function parseExactEmails() {
   return exactEmailsBox.value
@@ -625,9 +584,43 @@ function getAllRecipients() {
   return deduped;
 }
 
+// With fallback mode on, only the first address per company is actually
+// emailed up front - the rest wait in reserve for a bounce.
+function getActiveRecipientCount() {
+  const selected = getAllRecipients();
+  if (!fallbackModeCheckbox.checked) return selected.length;
+  const seenCompanies = new Set();
+  let active = 0;
+  for (const r of selected) {
+    const company = (r.company || '').trim().toLowerCase();
+    if (!company) {
+      active++;
+      continue;
+    }
+    if (!seenCompanies.has(company)) {
+      seenCompanies.add(company);
+      active++;
+    }
+  }
+  return active;
+}
+
+function updateFallbackSummary() {
+  const total = getAllRecipients().length;
+  const active = getActiveRecipientCount();
+  const held = total - active;
+  if (fallbackModeCheckbox.checked && held > 0) {
+    fallbackSummary.textContent = `${active} will be emailed; ${held} held as bounce fallback(s) — each is only used if an earlier address for its company bounces.`;
+  } else {
+    fallbackSummary.textContent =
+      'If the first address for a company bounces, the next candidate is emailed automatically. Uncheck to email every selected address.';
+  }
+}
+
 function updateSelectedCount() {
   const selected = getAllRecipients();
   document.getElementById('selectedCount').textContent = selected.length;
+  updateFallbackSummary();
 
   const duplicates = selected.filter((r) => sentEmailsSet.has(r.email.toLowerCase()));
   const warningEl = document.getElementById('duplicateWarning');
@@ -648,12 +641,19 @@ async function loadSendStatus() {
   try {
     const res = await fetch('/api/send-status');
     const s = await res.json();
+    const hours = s.sendHours ? ` Sending hours: ${s.sendHours}.` : '';
     if (!s.capEnabled) {
-      sendStatus.textContent = `${s.sentToday} sent today (no daily cap set).`;
+      sendStatus.textContent = `${s.sentToday} sent today (no daily cap set).${hours}`;
       sendStatus.className = 'hint';
       return;
     }
-    sendStatus.textContent = `${s.sentToday} / ${s.dailyLimit} sent today — ${s.remaining} left before the daily cap.`;
+    // During warm-up the cap is deliberately lower than the configured limit:
+    // a sudden jump in volume is the classic compromised-account signal, so
+    // the cap roughly doubles each week instead.
+    const warmup = s.warmup
+      ? ` Warm-up week ${s.warmup.week}: today's cap is ${s.warmup.limit}, ramping weekly to ${s.warmup.fullLimit} to build sender reputation.`
+      : '';
+    sendStatus.textContent = `${s.sentToday} / ${s.dailyLimit} sent today — ${s.remaining} left before the daily cap.${warmup}${hours}`;
     sendStatus.className = s.remaining <= 20 ? 'hint invalid' : 'hint';
   } catch {
     /* non-fatal */
@@ -680,7 +680,7 @@ submitBtn.addEventListener('click', async () => {
     return;
   }
 
-  const payload = { templateId, recipients };
+  const payload = { templateId, recipients, fallbackMode: fallbackModeCheckbox.checked };
   if (scheduleMode === 'later') {
     payload.scheduleAt = new Date(scheduleAt).toISOString();
   } else if (scheduleMode === 'random') {
@@ -758,7 +758,9 @@ async function loadJobs() {
     const el = document.createElement('div');
     el.className = 'job';
     const sent = job.recipients.filter((r) => r.status === 'sent').length;
-    const failed = job.recipients.filter((r) => r.status === 'failed').length;
+    const failed = job.recipients.filter((r) => ['failed', 'bounced'].includes(r.status)).length;
+    const bounced = job.recipients.filter((r) => r.status === 'bounced').length;
+    const standby = job.recipients.filter((r) => r.status === 'fallback').length;
     el.innerHTML = `
       <div class="job-header">
         <div>
@@ -766,9 +768,9 @@ async function loadJobs() {
           ${job.templateName ? `<span class="hint">(${escapeHtml(job.templateName)})</span>` : ''}
           <span class="status-pill status-${job.status}">${job.status}</span>
         </div>
-        ${['pending', 'paused_daily_limit'].includes(job.status) ? `<button class="cancel-btn" data-id="${job.id}">Cancel</button>` : ''}
+        ${['pending', 'paused_daily_limit', 'sending'].includes(job.status) ? `<button class="cancel-btn" data-id="${job.id}">Cancel</button>` : ''}
       </div>
-      <div>${job.recipients.length} recipient(s) &mdash; ${sent} sent, ${failed} failed</div>
+      <div>${job.recipients.length} recipient(s) &mdash; ${sent} sent, ${failed} failed${bounced > 0 ? ` (${bounced} bounced)` : ''}${standby > 0 ? `, ${standby} fallback(s) in reserve` : ''}</div>
       <div>${scheduleSummary(job)}</div>
       ${job.schedulingMode === 'random' ? '<div class="timeline-preview job-timeline"></div>' : ''}
       ${job.schedulingMode === 'random' ? renderRandomRecipients(job) : ''}
@@ -796,11 +798,18 @@ function scheduleSummary(job) {
   return 'Send immediately';
 }
 
+function recipientPillClass(status) {
+  if (status === 'sent') return 'completed';
+  if (status === 'failed' || status === 'bounced') return 'error';
+  if (status === 'fallback') return 'paused_daily_limit';
+  return 'pending';
+}
+
 function renderRandomRecipients(job) {
   const rows = job.recipients
     .map((r) => {
-      const when = r.sendAt ? new Date(r.sendAt).toLocaleString() : '?';
-      return `<div class="recipient-row">${escapeHtml(r.email)} &mdash; ${when} <span class="status-pill status-${r.status === 'sent' ? 'completed' : r.status === 'failed' ? 'error' : 'pending'}">${r.status}</span></div>`;
+      const when = r.status === 'fallback' ? 'standby' : r.sendAt ? new Date(r.sendAt).toLocaleString() : '?';
+      return `<div class="recipient-row">${escapeHtml(r.email)} &mdash; ${when} <span class="status-pill status-${recipientPillClass(r.status)}">${r.status}</span></div>`;
     })
     .join('');
   return `<div class="recipient-list">${rows}</div>`;
