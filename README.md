@@ -324,6 +324,31 @@ pm2-startup install   # or: npm install -g pm2-windows-startup && pm2-startup in
 
 </details>
 
+## Templates and the `{{company}}` placeholder
+
+A template's **subject** and **body** can contain the placeholder `{{company}}`, which is replaced per recipient when the email is sent. It's the one built-in personalization token — nothing else is substituted.
+
+**What fills it depends on how you added the recipient:**
+
+| How the recipient was added | What `{{company}}` becomes |
+| --- | --- |
+| **By company name** tab (guessed address) | The company name you typed (e.g. `Acme`) |
+| **Exact email addresses** tab, as `hr@acme.com, Acme` | The text after the comma (`Acme`) |
+| **Exact email addresses** tab, as just `hr@acme.com` | An **empty string** — the placeholder collapses to nothing |
+
+So the placeholder is *always* replaced — it's never left as literal `{{company}}`. But when there's no company, it becomes empty, which can leave awkward spacing or grammar:
+
+```
+Template:  Hi {{company}} team,
+With Acme: Hi Acme team,
+No company: Hi  team,          ← note the double space where the name would go
+```
+
+**Tips:**
+- In the *Exact email addresses* tab, put the company after a comma (`hr@acme.com, Acme`) so personalization works.
+- If you'll send to addresses without a company, write the template so it still reads correctly when the placeholder is empty (e.g. `Hi there,` instead of `Hi {{company}} team,`).
+- The placeholder works in **both** the subject and the body, and is case-sensitive: use exactly `{{company}}` (spaces inside the braces are fine, e.g. `{{ company }}`).
+
 ## Mailbox verification: bounce-based fallback
 
 The "Guess emails" step checks whether a **domain** has a mail server (an MX record) — it can't tell whether `hr@company.com` specifically exists, so every prefix guess for a live domain (`hr@`, `careers@`, `jobs@`, ...) is an unverified guess. Guessed domains now include startup-typical TLDs too (`.com`, `.in`, `.co.in`, `.co`, `.ai`, `.io`), each individually MX-checked.
