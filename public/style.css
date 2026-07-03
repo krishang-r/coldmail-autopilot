@@ -429,7 +429,9 @@ button.primary:disabled { background: var(--text-muted); cursor: not-allowed; bo
 }
 #jobsList .job:hover { transform: translateX(2px); }
 #jobsList .job.job-dismissed { opacity: 0.6; background: transparent; border-style: dashed; }
-.jobs-actions { display: flex; gap: 8px; align-items: center; }
+/* Override the .section-header > div flex:1 (same specificity, later wins) so
+   the button group stays its natural width and is pushed to the right. */
+.section-header > div.jobs-actions { display: flex; gap: 8px; align-items: center; flex: none; }
 .dismissed-heading { margin: 18px 0 8px; }
 button.link-btn {
   border: none;
