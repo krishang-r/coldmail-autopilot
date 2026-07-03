@@ -256,17 +256,6 @@ launchctl load   ~/Library/LaunchAgents/com.yourname.coldmailautopilot.plist
 launchctl list | grep coldmail   # a "0" in the second column means a clean start
 ```
 
-**Sleep still stops sends.** Running as a LaunchAgent keeps the app alive across terminal/login sessions, but when the Mac *sleeps* the Node process is suspended and its 15-second poller freezes — so a scheduled send won't fire until the machine wakes. Two layers handle this:
-
-- **Automatic (built in):** while sends are actively happening or imminently due, the app holds a `caffeinate` assertion so the Mac won't *idle*-sleep mid-campaign, and releases it once the queue is idle. On by default on macOS; disable with `PREVENT_SLEEP_WHILE_PENDING=false`. It does **not** hold the Mac awake for jobs scheduled far in the future (that would pin it on for no reason).
-- **For a closed lid / overnight schedules:** `caffeinate` can't beat clamshell sleep, so tell the Mac to *wake itself* before the sending window. One-time setup (needs your password), waking every weekday at 08:55:
-
-  ```bash
-  sudo pmset repeat wake MTWRF 08:55:00   # check with: pmset -g sched
-  ```
-
-  Keep the Mac plugged in — scheduled wake is unreliable on battery. Once it wakes, the built-in `caffeinate` keeps it up long enough to finish the paced sends.
-
 </details>
 
 <details>
@@ -334,6 +323,30 @@ pm2-startup install   # or: npm install -g pm2-windows-startup && pm2-startup in
 ```
 
 </details>
+
+### Sleep will still stop scheduled sends
+
+Running as a background service keeps the app alive across terminal/login sessions, but when the **computer sleeps** the Node process is suspended and its 15-second poller freezes — so a scheduled send won't fire until the machine wakes. Two layers handle this, on all three operating systems:
+
+**1. Automatic (built in) — prevents idle sleep during active sends.** While sends are actively happening or imminently due, the app holds a "stay awake" lock, and releases it the moment the queue is idle. It does **not** hold the machine awake for jobs scheduled far in the future (that would pin it on for no reason). On by default; disable with `PREVENT_SLEEP_WHILE_PENDING=false`. Under the hood it uses each OS's native mechanism, and if that mechanism is missing it just logs and carries on:
+
+| OS | Mechanism | Needs |
+| --- | --- | --- |
+| macOS | `caffeinate` | built in |
+| Linux | `systemd-inhibit` | systemd (most desktop distros) |
+| Windows | `SetThreadExecutionState` via PowerShell | built in |
+
+**2. For a closed lid / overnight schedules — wake the machine first.** The built-in lock only prevents *idle* sleep; it can't keep a laptop awake with the lid closed, and it can't wake a machine that's already asleep when a future send comes due. For those cases, tell the OS to wake itself shortly before the sending window, and keep it plugged in (scheduled wake is unreliable on battery). Once it wakes, the built-in lock keeps it up long enough to finish the paced sends.
+
+- **macOS** — wake every weekday at 08:55 (needs your password):
+  ```bash
+  sudo pmset repeat wake MTWRF 08:55:00   # check with: pmset -g sched
+  ```
+- **Linux** — a one-shot at a time via `rtcwake`, or better a recurring `systemd` timer with `WakeSystem=true`:
+  ```bash
+  sudo rtcwake -m no -l -t "$(date -d 'tomorrow 08:55' +%s)"   # arm a wake without sleeping now
+  ```
+- **Windows** — in your Task Scheduler task, **Conditions** tab → check **Wake the computer to run this task**, and add a daily trigger a few minutes before your window. Also make sure *Allow wake timers* is enabled in the active power plan.
 
 ## Templates and the `{{company}}` placeholder
 
