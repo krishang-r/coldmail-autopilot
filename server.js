@@ -374,6 +374,35 @@ app.delete('/api/jobs/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Archive (hide) all finished jobs at once, to keep the Jobs list from
+// stacking up. Archiving is a soft-hide, not a delete: the job data stays in
+// the store so the daily-cap counter, send-pacing gate and bounce watcher keep
+// working correctly.
+app.post('/api/jobs/archive-finished', (req, res) => {
+  const count = store.archiveFinishedJobs();
+  logger.info(`Archived ${count} finished job(s) from the Jobs list`);
+  res.json({ ok: true, archived: count });
+});
+
+// Archive or restore a single job. Only finished jobs can be archived (active
+// ones should be cancelled instead); any archived job can be restored.
+app.post('/api/jobs/:id/archive', (req, res) => {
+  const job = store.getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'not found' });
+  if (!store.TERMINAL_STATUSES.includes(job.status)) {
+    return res.status(400).json({ error: 'only finished jobs can be dismissed - cancel active jobs instead' });
+  }
+  const updated = store.setJobArchived(req.params.id, true);
+  res.json({ job: updated });
+});
+
+app.post('/api/jobs/:id/unarchive', (req, res) => {
+  const job = store.getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'not found' });
+  const updated = store.setJobArchived(req.params.id, false);
+  res.json({ job: updated });
+});
+
 const httpServer = app.listen(PORT, () => {
   console.log(`Coldmail Autopilot running at http://localhost:${PORT}`);
   scheduler.start();

@@ -193,9 +193,13 @@
       <h2>Jobs</h2>
       <p class="section-desc">Track everything queued, sending, or completed.</p>
     </div>
-    <button id="refreshBtn" type="button" class="ghost-btn refresh-btn">⟳ Refresh</button>
+    <div class="jobs-actions">
+      <button id="clearFinishedBtn" type="button" class="ghost-btn" hidden>🧹 Clear finished</button>
+      <button id="refreshBtn" type="button" class="ghost-btn refresh-btn">⟳ Refresh</button>
+    </div>
   </div>
   <div class="section-body">
+    <button id="toggleDismissedBtn" type="button" class="link-btn" hidden></button>
     <div id="jobsList"></div>
   </div>
 </section>

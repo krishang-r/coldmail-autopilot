@@ -749,43 +749,97 @@ function renderTimeline(container, job) {
   }
 }
 
+const TERMINAL_JOB_STATUSES = ['completed', 'completed_with_errors', 'error'];
+const ACTIVE_JOB_STATUSES = ['pending', 'paused_daily_limit', 'sending'];
+let showDismissed = false;
+
 async function loadJobs() {
   const res = await fetch('/api/jobs');
   const data = await res.json();
+  const jobs = data.jobs || [];
+  const visible = jobs.filter((j) => !j.archived);
+  const dismissed = jobs.filter((j) => j.archived);
+  const finishedVisible = visible.filter((j) => TERMINAL_JOB_STATUSES.includes(j.status));
+
+  // Toolbar: "Clear finished" (only when there are finished, un-dismissed jobs)
+  // and a "Show/Hide dismissed" toggle (only when some jobs are dismissed).
+  const clearBtn = document.getElementById('clearFinishedBtn');
+  clearBtn.hidden = finishedVisible.length === 0;
+  clearBtn.textContent = `🧹 Clear finished (${finishedVisible.length})`;
+  const toggleBtn = document.getElementById('toggleDismissedBtn');
+  toggleBtn.hidden = dismissed.length === 0;
+  toggleBtn.textContent = showDismissed ? `Hide dismissed (${dismissed.length})` : `Show dismissed (${dismissed.length})`;
+
   const container = document.getElementById('jobsList');
   container.innerHTML = '';
-  for (const job of data.jobs) {
-    const el = document.createElement('div');
-    el.className = 'job';
-    const sent = job.recipients.filter((r) => r.status === 'sent').length;
-    const failed = job.recipients.filter((r) => ['failed', 'bounced'].includes(r.status)).length;
-    const bounced = job.recipients.filter((r) => r.status === 'bounced').length;
-    const standby = job.recipients.filter((r) => r.status === 'fallback').length;
-    el.innerHTML = `
-      <div class="job-header">
-        <div>
-          <strong>${escapeHtml(job.subject)}</strong>
-          ${job.templateName ? `<span class="hint">(${escapeHtml(job.templateName)})</span>` : ''}
-          <span class="status-pill status-${job.status}">${job.status}</span>
-        </div>
-        ${['pending', 'paused_daily_limit', 'sending'].includes(job.status) ? `<button class="cancel-btn" data-id="${job.id}">Cancel</button>` : ''}
-      </div>
-      <div>${job.recipients.length} recipient(s) &mdash; ${sent} sent, ${failed} failed${bounced > 0 ? ` (${bounced} bounced)` : ''}${standby > 0 ? `, ${standby} fallback(s) in reserve` : ''}</div>
-      <div>${scheduleSummary(job)}</div>
-      ${job.schedulingMode === 'random' ? '<div class="timeline-preview job-timeline"></div>' : ''}
-      ${job.schedulingMode === 'random' ? renderRandomRecipients(job) : ''}
-    `;
-    container.appendChild(el);
-    if (job.schedulingMode === 'random') {
-      renderTimeline(el.querySelector('.job-timeline'), job);
-    }
+
+  if (visible.length === 0) {
+    container.innerHTML = '<p class="hint">No active jobs. Create one above.</p>';
   }
-  container.querySelectorAll('.cancel-btn').forEach((btn) => {
+  for (const job of visible) renderJobCard(job, container, false);
+  if (showDismissed && dismissed.length > 0) {
+    const heading = document.createElement('p');
+    heading.className = 'hint dismissed-heading';
+    heading.textContent = `Dismissed (${dismissed.length}) — hidden from the list but still counted toward the daily cap:`;
+    container.appendChild(heading);
+    for (const job of dismissed) renderJobCard(job, container, true);
+  }
+
+  container.querySelectorAll('.cancel-btn').forEach((btn) =>
     btn.addEventListener('click', async () => {
       await fetch(`/api/jobs/${btn.dataset.id}`, { method: 'DELETE' });
       loadJobs();
-    });
-  });
+    })
+  );
+  container.querySelectorAll('.dismiss-btn').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/jobs/${btn.dataset.id}/archive`, { method: 'POST' });
+      loadJobs();
+    })
+  );
+  container.querySelectorAll('.restore-btn').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/jobs/${btn.dataset.id}/unarchive`, { method: 'POST' });
+      loadJobs();
+    })
+  );
+}
+
+function renderJobCard(job, container, isArchived) {
+  const el = document.createElement('div');
+  el.className = 'job' + (isArchived ? ' job-dismissed' : '');
+  const sent = job.recipients.filter((r) => r.status === 'sent').length;
+  const failed = job.recipients.filter((r) => ['failed', 'bounced'].includes(r.status)).length;
+  const bounced = job.recipients.filter((r) => r.status === 'bounced').length;
+  const standby = job.recipients.filter((r) => r.status === 'fallback').length;
+
+  let actionBtn = '';
+  if (isArchived) {
+    actionBtn = `<button class="restore-btn ghost-btn" data-id="${job.id}">Restore</button>`;
+  } else if (ACTIVE_JOB_STATUSES.includes(job.status)) {
+    actionBtn = `<button class="cancel-btn" data-id="${job.id}">Cancel</button>`;
+  } else if (TERMINAL_JOB_STATUSES.includes(job.status)) {
+    actionBtn = `<button class="dismiss-btn ghost-btn" data-id="${job.id}" title="Hide this finished job">✕ Dismiss</button>`;
+  }
+
+  el.innerHTML = `
+    <div class="job-header">
+      <div>
+        <strong>${escapeHtml(job.subject)}</strong>
+        ${job.templateName ? `<span class="hint">(${escapeHtml(job.templateName)})</span>` : ''}
+        <span class="status-pill status-${job.status}">${job.status}</span>
+      </div>
+      ${actionBtn}
+    </div>
+    <div>${job.recipients.length} recipient(s) &mdash; ${sent} sent, ${failed} failed${bounced > 0 ? ` (${bounced} bounced)` : ''}${standby > 0 ? `, ${standby} fallback(s) in reserve` : ''}</div>
+    <div>${scheduleSummary(job)}</div>
+    ${job.schedulingMode === 'random' ? '<div class="timeline-preview job-timeline"></div>' : ''}
+    ${job.schedulingMode === 'random' ? renderRandomRecipients(job) : ''}
+  `;
+  container.appendChild(el);
+  if (job.schedulingMode === 'random') {
+    renderTimeline(el.querySelector('.job-timeline'), job);
+  }
 }
 
 function scheduleSummary(job) {
@@ -822,6 +876,14 @@ function escapeHtml(str) {
 }
 
 document.getElementById('refreshBtn').addEventListener('click', loadJobs);
+document.getElementById('clearFinishedBtn').addEventListener('click', async () => {
+  await fetch('/api/jobs/archive-finished', { method: 'POST' });
+  loadJobs();
+});
+document.getElementById('toggleDismissedBtn').addEventListener('click', () => {
+  showDismissed = !showDismissed;
+  loadJobs();
+});
 loadJobs();
 loadTemplates();
 loadSentEmails();

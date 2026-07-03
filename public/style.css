@@ -428,6 +428,21 @@ button.primary:disabled { background: var(--text-muted); cursor: not-allowed; bo
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 #jobsList .job:hover { transform: translateX(2px); }
+#jobsList .job.job-dismissed { opacity: 0.6; background: transparent; border-style: dashed; }
+.jobs-actions { display: flex; gap: 8px; align-items: center; }
+.dismissed-heading { margin: 18px 0 8px; }
+button.link-btn {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  margin: 0 0 10px;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  width: auto;
+}
+button.link-btn:hover { color: var(--accent-dark); }
 .job .job-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .job .job-header strong { font-size: 14px; }
 .status-pill {
