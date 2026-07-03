@@ -825,6 +825,7 @@ function renderJobCard(job, container, isArchived) {
   el.innerHTML = `
     <div class="job-header">
       <div>
+        <span class="job-light job-light-${jobLightState(job.status)}" title="${jobLightTitle(job.status)}"></span>
         <strong>${escapeHtml(job.subject)}</strong>
         ${job.templateName ? `<span class="hint">(${escapeHtml(job.templateName)})</span>` : ''}
         <span class="status-pill status-${job.status}">${job.status}</span>
@@ -852,6 +853,22 @@ function scheduleSummary(job) {
   return 'Send immediately';
 }
 
+// Status light: yellow while the job is still working, green once it has
+// finished (even if some recipients failed/bounced - it still completed), red
+// only if the whole job errored out before it could run.
+function jobLightState(status) {
+  if (status === 'completed' || status === 'completed_with_errors') return 'done';
+  if (status === 'error') return 'error';
+  return 'progress'; // pending, sending, paused_daily_limit
+}
+
+function jobLightTitle(status) {
+  if (status === 'completed') return 'Completed';
+  if (status === 'completed_with_errors') return 'Completed (some sends failed)';
+  if (status === 'error') return 'Errored before completing';
+  return 'In progress';
+}
+
 function recipientPillClass(status) {
   if (status === 'sent') return 'completed';
   if (status === 'failed' || status === 'bounced') return 'error';
@@ -866,7 +883,12 @@ function renderRandomRecipients(job) {
       return `<div class="recipient-row">${escapeHtml(r.email)} &mdash; ${when} <span class="status-pill status-${recipientPillClass(r.status)}">${r.status}</span></div>`;
     })
     .join('');
-  return `<div class="recipient-list">${rows}</div>`;
+  const sent = job.recipients.filter((r) => r.status === 'sent').length;
+  // Collapsed by default so long recipient lists don't make the card huge.
+  return `<details class="recipient-details">
+    <summary>Recipients (${job.recipients.length}) &mdash; ${sent} sent</summary>
+    <div class="recipient-list">${rows}</div>
+  </details>`;
 }
 
 function escapeHtml(str) {

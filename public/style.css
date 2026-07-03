@@ -444,6 +444,42 @@ button.link-btn {
 }
 button.link-btn:hover { color: var(--accent-dark); }
 .job .job-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+/* Status light: yellow = in progress, green = done (even with errors), red = errored */
+.job-light {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 8px;
+  vertical-align: middle;
+  flex: none;
+}
+.job-light-progress {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 20%, transparent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.job-light-done {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 20%, transparent);
+}
+.job-light-error {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+/* Collapsible "tried mails" list inside a job card */
+.recipient-details { margin-top: 8px; }
+.recipient-details > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: revert;
+}
+.recipient-details > summary:hover { color: var(--accent); }
+.recipient-details[open] > summary { margin-bottom: 6px; }
 .job .job-header strong { font-size: 14px; }
 .status-pill {
   display: inline-block;
