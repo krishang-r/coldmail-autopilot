@@ -256,6 +256,17 @@ launchctl load   ~/Library/LaunchAgents/com.yourname.coldmailautopilot.plist
 launchctl list | grep coldmail   # a "0" in the second column means a clean start
 ```
 
+**Sleep still stops sends.** Running as a LaunchAgent keeps the app alive across terminal/login sessions, but when the Mac *sleeps* the Node process is suspended and its 15-second poller freezes — so a scheduled send won't fire until the machine wakes. Two layers handle this:
+
+- **Automatic (built in):** while sends are actively happening or imminently due, the app holds a `caffeinate` assertion so the Mac won't *idle*-sleep mid-campaign, and releases it once the queue is idle. On by default on macOS; disable with `PREVENT_SLEEP_WHILE_PENDING=false`. It does **not** hold the Mac awake for jobs scheduled far in the future (that would pin it on for no reason).
+- **For a closed lid / overnight schedules:** `caffeinate` can't beat clamshell sleep, so tell the Mac to *wake itself* before the sending window. One-time setup (needs your password), waking every weekday at 08:55:
+
+  ```bash
+  sudo pmset repeat wake MTWRF 08:55:00   # check with: pmset -g sched
+  ```
+
+  Keep the Mac plugged in — scheduled wake is unreliable on battery. Once it wakes, the built-in `caffeinate` keeps it up long enough to finish the paced sends.
+
 </details>
 
 <details>
