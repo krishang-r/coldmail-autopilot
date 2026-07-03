@@ -281,7 +281,10 @@ button.ghost-btn { border-color: transparent; background: var(--hover-bg); }
 button.refresh-btn { margin-top: 0; }
 
 .button-row { display: flex; gap: 10px; }
-.button-row button { flex: none; }
+.button-row button { flex: 1; }
+/* The .primary button is width:100% by default, which overflows a two-button
+   row - let it size to the shared flex track instead. */
+.button-row button.primary { width: auto; }
 
 button.primary {
   background: var(--accent);
